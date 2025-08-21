@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "840612354931",
+    "project_id": "aura-b8111",
+    "storage_bucket": "aura-b8111.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:840612354931:android:648f8290b314cae331c306",
+        "android_client_info": {
+          "package_name": "com.sulhoe.aura"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDUQzgX_wIP-IF2Jh86sJmaEAeCiMWVL4g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

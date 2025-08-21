@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">AURA</string>
+    <string name="ch_notice_id">notice</string>
+    <string name="ch_notice_name">일반 공지</string>
+    <string name="ch_notice_desc">학사/장학/학과 등 일반 공지 알림</string>
+
+    <string name="ch_urgent_id">urgent</string>
+    <string name="ch_urgent_name">긴급 알림</string>
+    <string name="ch_urgent_desc">수업 취소/마감 임박 등 긴급 안내</string>
+
+    <string name="ch_system_id">system</string>
+    <string name="ch_system_name">시스템 안내</string>
+    <string name="ch_system_desc">앱 업데이트/점검 안내</string>
+</resources>
