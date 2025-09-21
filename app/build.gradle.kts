@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.sulhoe.aura"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.sulhoe.aura"
@@ -29,11 +29,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -58,4 +58,9 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    implementation("androidx.browser:browser:1.8.0") // custom tab
+    implementation ("androidx.webkit:webkit:1.11.0")
+    implementation (libs.okhttp)     // 네트워크 호출
+    implementation(libs.kotlinx.coroutines.android)
 }
