@@ -1,4 +1,4 @@
-// com/sulhoe/aura/ui/AuthRedirectActivity.kt
+// AuthRedirectActivity.kt
 package com.sulhoe.aura.ui
 
 import android.app.Activity
