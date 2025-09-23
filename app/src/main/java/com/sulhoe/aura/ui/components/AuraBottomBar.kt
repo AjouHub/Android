@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.sharp.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -27,7 +28,7 @@ fun AuraBottomBar(
     // 네비게이션 아이템 리스트 생성
     val navItems = listOf(
         BottomNavItem("home", "홈", Icons.Outlined.Home),
-        BottomNavItem("bookmark", "북마크", Icons.Outlined.Star),
+        BottomNavItem("bookmark", "북마크", Icons.Sharp.Star),
         BottomNavItem("settings", "설정", Icons.Outlined.Settings)
     )
 
