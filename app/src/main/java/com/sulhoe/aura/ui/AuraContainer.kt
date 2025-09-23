@@ -14,12 +14,25 @@ import com.sulhoe.aura.ui.components.AuraTopBar
 import com.sulhoe.aura.ui.web.NoticeDetailWebView
 import com.sulhoe.aura.ui.web.NoticeListWebView
 import com.sulhoe.aura.ui.web.WebBridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+
+private enum class AuthState(val wireValue: String) {
+    Idle("idle"),
+    Reauthenticating("reauthenticating"),
+    Success("success"),
+    Failed("failed")
+}
 
 @Composable
 fun AuraContainer(
     frontOrigin: String, apiOrigin: String, appScheme: String, frontEntryUrl: String
 ) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var currentTab by remember { mutableStateOf("home") }
     var detailUrl by remember { mutableStateOf<String?>(null) }
@@ -28,8 +41,16 @@ fun AuraContainer(
     var query by remember { mutableStateOf("") }
 
     var reauthInFlight by remember { mutableStateOf(false) }
+    var reauthPendingOAuth by remember { mutableStateOf(false) }
+    var reauthState by remember { mutableStateOf(AuthState.Idle) }
     var lastReauthAt by remember { mutableStateOf(0L) }
     var lastOAuthLaunchAt by remember { mutableStateOf(0L) }
+
+    fun updateAuthState(state: AuthState) {
+        if (reauthState == state) return
+        reauthState = state
+        WebBridge.setAuthState(state.wireValue)
+    }
 
     fun hasBackendSessionCookie(): Boolean {
         val cookies = CookieManager.getInstance().getCookie("$apiOrigin/") ?: return false
@@ -47,35 +68,77 @@ fun AuraContainer(
 
     // [수정됨] 상태 기반의 재인증 로직
     fun reauthFlow() {
+        if (reauthPendingOAuth && hasBackendSessionCookie()) {
+            reauthPendingOAuth = false
+        }
+
         val now = System.currentTimeMillis()
+        if (reauthPendingOAuth && !hasBackendSessionCookie()) {
+            updateAuthState(AuthState.Failed)
+            openOAuthInCustomTab()
+            return
+        }
+
         if (reauthInFlight || now - lastReauthAt < 2000) return  // 쿨다운 2초로 증가
         reauthInFlight = true
         lastReauthAt = now
 
         // 1. 웹에게 "재인증 중" 상태 즉시 전파
-        WebBridge.setAuthState("reauthenticating")
+        updateAuthState(AuthState.Reauthenticating)
 
-        // 2. 백그라운드에서 토큰 갱신 시도
-        WebBridge.listWebView?.postUrl("$apiOrigin/api/auth/refresh", ByteArray(0))
+        val sessionCookie = CookieManager.getInstance().getCookie("$apiOrigin/")
+        if (sessionCookie.isNullOrBlank()) {
+            updateAuthState(AuthState.Failed)
+            reauthInFlight = false
+            reauthPendingOAuth = true
+            openOAuthInCustomTab()
+            return
+        }
 
-        // 3. 1초 후 쿠키 상태 확인 (네트워크 지연 고려)
-        WebBridge.listWebView?.postDelayed({
-            try {
-                if (hasBackendSessionCookie()) {
-                    // 3a. 성공: 웹에게 알리고 리로드하여 새 세션 적용
-                    WebBridge.setAuthState("success")
-                    WebBridge.listWebView?.reload()
-                } else {
-                    // 3b. 실패: 웹에게 알리고 OAuth 열기
-                    WebBridge.setAuthState("failed")
-                    openOAuthInCustomTab()
-                }
-            } finally {
-                // 4. 모든 과정이 끝나면 플래그 해제하고, 잠시 후 상태를 'idle'로 복귀
-                reauthInFlight = false
-                WebBridge.listWebView?.postDelayed({ WebBridge.setAuthState("idle") }, 500)
+        scope.launch {
+            val refreshResult = withContext(Dispatchers.IO) {
+                runCatching {
+                    val url = URL("$apiOrigin/api/auth/refresh")
+                    val connection = (url.openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        setFixedLengthStreamingMode(0)
+                        setRequestProperty("Cookie", sessionCookie)
+                        setRequestProperty("Accept", "*/*")
+                    }
+
+                    connection.outputStream.use { }
+                    val responseCode = connection.responseCode
+                    val setCookies = connection.headerFields["Set-Cookie"].orEmpty()
+                    try {
+                        connection.inputStream?.close()
+                    } catch (_: Exception) {
+                    }
+                    connection.errorStream?.close()
+                    connection.disconnect()
+
+                    responseCode to setCookies
+                }.getOrNull()
             }
-        }, 1000) // 쿠키 정착 및 네트워크 시간 대기를 1초로 조정
+
+            val (responseCode, setCookies) = refreshResult ?: (-1 to emptyList<String>())
+            val cookieManager = CookieManager.getInstance()
+            setCookies.forEach { cookieManager.setCookie(apiOrigin, it) }
+            cookieManager.flush()
+
+            val success = responseCode in 200..299 && hasBackendSessionCookie()
+            if (success) {
+                reauthPendingOAuth = false
+                updateAuthState(AuthState.Success)
+                WebBridge.listWebView?.postDelayed({ updateAuthState(AuthState.Idle) }, 500)
+            } else {
+                reauthPendingOAuth = true
+                updateAuthState(AuthState.Failed)
+                openOAuthInCustomTab()
+            }
+
+            reauthInFlight = false
+        }
     }
 
     fun logoutFlow() {
