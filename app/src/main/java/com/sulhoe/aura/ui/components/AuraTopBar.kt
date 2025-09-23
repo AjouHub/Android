@@ -79,7 +79,7 @@ fun AuraTopBar(
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
                                 text = title,
-                                fontSize = 22.sp,
+                                fontSize = 40.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color.Unspecified,
                                 style = LocalTextStyle.current.copy(
