@@ -1,4 +1,5 @@
 // AuraTopBar.kt
+
 package com.sulhoe.aura.ui.components
 
 import androidx.compose.animation.AnimatedContent
@@ -17,16 +18,23 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
 
 @Composable
 fun AuraTopBar(
@@ -103,21 +111,24 @@ fun AuraTopBar(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         IconButton(onClick = { onSearchToggle(false) }) {
-                            // [수정 2] AutoMirrored 버전 아이콘 사용
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                         }
-                        var tfv by remember(query) { mutableStateOf(TextFieldValue(query)) }
+                        var tfv by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+                            mutableStateOf(TextFieldValue(query, selection = TextRange(query.length)))
+                        }
+                        // 검색 창
                         TextField(
                             value = tfv,
-                            onValueChange = {
-                                tfv = it
-                                onQueryChange(it.text)      // 실시간 변화 전달
+                            onValueChange = { newV ->
+                                tfv = newV
+                                onQueryChange(newV.text) // <<< 수정된 부분
                             },
                             placeholder = { Text("검색어를 입력하세요") },
                             singleLine = true,
                             modifier = Modifier
                                 .padding(start = 4.dp)
-                                .fillMaxWidth(),
+                                .weight(1f),                           // ← 원하시는 UI 유지를 위해 weight 사용
+
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color(0xFFF4F6F8),
                                 unfocusedContainerColor = Color(0xFFF4F6F8),
@@ -130,6 +141,13 @@ fun AuraTopBar(
                                 onSearch = { onSubmit(tfv.text) }
                             )
                         )
+                        // 우측: 명시적 검색 버튼
+                        IconButton(
+                            onClick = { onSubmit(tfv.text) },
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            Icon(Icons.Outlined.Search, contentDescription = "검색 실행")
+                        }
                     }
                 }
             }

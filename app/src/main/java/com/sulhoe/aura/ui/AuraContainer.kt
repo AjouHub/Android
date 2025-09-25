@@ -91,7 +91,7 @@ fun AuraContainer(
                 isSearching = isSearching,
                 query = query,
                 onSearchToggle = { open -> isSearching = open },
-                onQueryChange = { q -> query = q; WebBridge.searchChange(q) },
+                onQueryChange = { q -> query = q },
                 onSubmit = { q -> query = q; WebBridge.searchSubmit(q) }
             )
         },
