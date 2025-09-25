@@ -65,4 +65,5 @@ dependencies {
     implementation ("androidx.webkit:webkit:1.11.0")
     implementation (libs.okhttp)     // 네트워크 호출
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.core.splashscreen)
 }
