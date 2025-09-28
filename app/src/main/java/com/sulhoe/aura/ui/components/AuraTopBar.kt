@@ -1,5 +1,6 @@
 package com.sulhoe.aura.ui.components
 
+import android.annotation.SuppressLint
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -15,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -34,70 +36,69 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
+// 모드: LIST(검색), DETAIL(뒤로+공유), OTHER(타이틀만)
+enum class TopBarMode { LIST, DETAIL, OTHER }
+
+@SuppressLint("RememberInComposition")
 @Composable
 fun AuraTopBar(
+    mode: TopBarMode = TopBarMode.LIST,
     isSearching: Boolean,
     query: String,
     onSearchToggle: (Boolean) -> Unit,
     onQueryChange: (String) -> Unit,
     onSubmit: (String) -> Unit,
-    title: String = "AURA",
+    onShareClick: (() -> Unit)? = null,
+    onBackClick: (() -> Unit)? = null, // DETAIL 왼쪽 뒤로가기
 ) {
     val swipeThresholdPx = 40f
     val keyboardController = LocalSoftwareKeyboardController.current
-    val focusRequester = remember { FocusRequester() }
+    val focusRequester = FocusRequester()
 
-    // 내부 입력 상태
     var tfv by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(query, selection = TextRange(query.length)))
     }
 
-    // 검색 닫기 + 초기화(요구사항 3)
     fun closeSearchAndClear() {
         keyboardController?.hide()
-
-        // (0) 조합 중이면 커밋해서 잔여 composition 제거 (선택)
         if (tfv.composition != null) {
             tfv = tfv.copy(composition = null, selection = TextRange(tfv.text.length))
         }
-
-        // (1) 먼저 빈 쿼리를 반영
         onQueryChange("")
-
-        // (2) 빈 문자열로 즉시 검색 실행
         onSubmit("")
-        // (3) 내부 입력 초기화
         tfv = TextFieldValue("")
-
-        // (4) 마지막에 검색창 닫기
         onSearchToggle(false)
     }
 
-    // 조합 강제 커밋 + 외부 쿼리 동기화 + 검색 실행
     fun commitAndSubmit() {
-        // 한글 조합 중이면 커밋
         if (tfv.composition != null) {
             tfv = tfv.copy(composition = null, selection = TextRange(tfv.text.length))
         }
-        onQueryChange(tfv.text)  // 외부 쿼리를 먼저 갱신
-        onSubmit(tfv.text)       // 그 다음 검색 실행
+        onQueryChange(tfv.text)
+        onSubmit(tfv.text)
     }
 
-    // 하드웨어 뒤로가기(요구사항 2)
-    BackHandler(enabled = isSearching) {
+    // 검색 뒤로가기는 LIST에서만 허용
+    BackHandler(enabled = (mode == TopBarMode.LIST && isSearching)) {
         closeSearchAndClear()
     }
 
+    val searchEnabled = (mode == TopBarMode.LIST)
+    val searchingStateForUI = searchEnabled && isSearching
+
     Column(
         Modifier
-            .background(Color.White) // 요구사항 1: Light 고정
+            .background(Color.White)
             .statusBarsPadding()
-            .pointerInput(isSearching) {
-                detectHorizontalDragGestures { _, dragAmount ->
-                    if (!isSearching && dragAmount < -swipeThresholdPx) onSearchToggle(true)
-                    if (isSearching && dragAmount > swipeThresholdPx) closeSearchAndClear()
-                }
-            }
+            // 제스처 열기/닫기도 LIST에서만
+            .then(
+                if (searchEnabled) Modifier.pointerInput(isSearching) {
+                    detectHorizontalDragGestures { _, dragAmount ->
+                        if (!isSearching && dragAmount < -swipeThresholdPx) onSearchToggle(true)
+                        if (isSearching && dragAmount > swipeThresholdPx) closeSearchAndClear()
+                    }
+                } else Modifier
+            )
     ) {
         Box(
             modifier = Modifier
@@ -107,7 +108,7 @@ fun AuraTopBar(
             contentAlignment = Alignment.CenterStart
         ) {
             AnimatedContent(
-                targetState = isSearching,
+                targetState = searchingStateForUI, // DETAIL/OTHER에서는 false
                 transitionSpec = {
                     if (targetState) {
                         (slideInHorizontally(tween(220)) { it } togetherWith
@@ -122,11 +123,26 @@ fun AuraTopBar(
                 label = "AuraTopBarSearchAnim"
             ) { searching ->
                 if (!searching) {
-                    // 기본 탑바
+                    // 기본 탑바 (타이틀은 항상 AURA)
                     Box(Modifier.fillMaxSize()) {
+                        // 좌측: DETAIL일 때 뒤로가기 버튼
+                        if (mode == TopBarMode.DETAIL) {
+                            IconButton(
+                                onClick = { onBackClick?.invoke() },
+                                modifier = Modifier.align(Alignment.CenterStart)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.ArrowBack,
+                                    contentDescription = "뒤로",
+                                    tint = Color(0xFF202124)
+                                )
+                            }
+                        }
+
+                        // 타이틀
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
-                                text = title,
+                                text = "AURA",
                                 fontSize = 40.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color.Unspecified,
@@ -137,19 +153,40 @@ fun AuraTopBar(
                                 )
                             )
                         }
-                        IconButton(
-                            onClick = { onSearchToggle(true) },
-                            modifier = Modifier.align(Alignment.CenterEnd)
-                        ) {
-                            Icon(
-                                Icons.Outlined.Search,
-                                contentDescription = "Search",
-                                tint = Color(0xFF202124) // Light 고정
-                            )
+
+                        // 우측: LIST=검색, DETAIL=공유, OTHER=없음
+                        when (mode) {
+                            TopBarMode.LIST -> {
+                                IconButton(
+                                    onClick = { onSearchToggle(true) },
+                                    modifier = Modifier.align(Alignment.CenterEnd)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Search,
+                                        contentDescription = "Search",
+                                        tint = Color(0xFF202124)
+                                    )
+                                }
+                            }
+                            TopBarMode.DETAIL -> {
+                                IconButton(
+                                    onClick = { onShareClick?.invoke() },
+                                    modifier = Modifier.align(Alignment.CenterEnd)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Share,
+                                        contentDescription = "공유",
+                                        tint = Color(0xFF202124)
+                                    )
+                                }
+                            }
+                            TopBarMode.OTHER -> {
+                                // 아이콘 없음
+                            }
                         }
                     }
                 } else {
-                    // 검색 모드
+                    // 검색 모드 (LIST에서만)
                     LaunchedEffect(Unit) {
                         delay(100)
                         focusRequester.requestFocus()
@@ -162,23 +199,19 @@ fun AuraTopBar(
                             Icon(
                                 Icons.AutoMirrored.Outlined.ArrowBack,
                                 contentDescription = "Back",
-                                tint = Color(0xFF202124) // Light 고정
+                                tint = Color(0xFF202124)
                             )
                         }
 
                         TextField(
                             value = tfv,
                             onValueChange = { newV ->
-                                // 내부 상태는 항상 반영
                                 tfv = newV
-                                // 조합 중에는 외부 상태를 건드리지 않음(한글 분해 방지)
                                 if (newV.composition == null) {
                                     onQueryChange(newV.text)
                                 }
                             },
-                            placeholder = {
-                                Text("검색어를 입력하세요", color = Color(0xFF5F6368)) // Light 고정
-                            },
+                            placeholder = { Text("검색어를 입력하세요", color = Color(0xFF5F6368)) },
                             singleLine = true,
                             modifier = Modifier
                                 .padding(start = 4.dp)
@@ -188,7 +221,7 @@ fun AuraTopBar(
                             keyboardActions = KeyboardActions(
                                 onSearch = {
                                     keyboardController?.hide()
-                                    commitAndSubmit() // ← 조합 커밋 + 외부 동기화 + 검색
+                                    commitAndSubmit()
                                 }
                             ),
                             colors = TextFieldDefaults.colors(
@@ -208,14 +241,14 @@ fun AuraTopBar(
                         IconButton(
                             onClick = {
                                 keyboardController?.hide()
-                                commitAndSubmit() // ← 아이콘도 동일 경로
+                                commitAndSubmit()
                             },
                             modifier = Modifier.padding(start = 4.dp)
                         ) {
                             Icon(
                                 Icons.Outlined.Search,
                                 contentDescription = "검색 실행",
-                                tint = Color(0xFF202124) // Light 고정
+                                tint = Color(0xFF202124)
                             )
                         }
                     }

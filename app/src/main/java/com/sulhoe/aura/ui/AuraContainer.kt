@@ -1,5 +1,7 @@
 package com.sulhoe.aura.ui
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.webkit.CookieManager
 import androidx.browser.customtabs.CustomTabsIntent
@@ -10,16 +12,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.sulhoe.aura.ui.common.LoadState
-import com.sulhoe.aura.ui.components.AuraBottomBar
-import com.sulhoe.aura.ui.components.AuraTopBar
-import com.sulhoe.aura.ui.components.DelayPage
-import com.sulhoe.aura.ui.components.ErrorPage
-import com.sulhoe.aura.ui.web.NoticeDetailWebView
-import com.sulhoe.aura.ui.web.NoticeListWebView
-import com.sulhoe.aura.ui.web.WebBridge
-import com.sulhoe.aura.ui.web.WebViewHandle
+import com.sulhoe.aura.ui.components.*
+import com.sulhoe.aura.ui.web.*
 
 private const val ABOUT_BLANK = "about:blank"
+
+private fun shareLink(ctx: Context, link: String?, title: String = "AURA 공지 공유") {
+    val safe = link?.trim().orEmpty()
+    val uri = runCatching { Uri.parse(safe) }.getOrNull()
+    if (uri == null || !(uri.scheme.equals("http", true) || uri.scheme.equals("https", true))) return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, safe)
+    }
+    ctx.startActivity(Intent.createChooser(intent, "링크 공유"))
+}
 
 @Composable
 fun AuraContainer(
@@ -28,7 +36,7 @@ fun AuraContainer(
 ) {
     val ctx = LocalContext.current
 
-    var currentTab by remember { mutableStateOf("home") }
+    var currentTab by remember { mutableStateOf("home") } // 현재 선택 탭
     var detailUrl by remember { mutableStateOf<String?>(null) }
 
     var isSearching by remember { mutableStateOf(false) }
@@ -83,7 +91,6 @@ fun AuraContainer(
             WebBridge.load(frontEntryUrl)
         }
     }
-
     fun closeDetailAndEnsureListVisible() {
         detailUrl = null
         detailLoadState = LoadState.Idle
@@ -94,24 +101,66 @@ fun AuraContainer(
         }
     }
 
+    fun String?.isHttpUrl(): Boolean =
+        !this.isNullOrBlank() && (this.startsWith("http://") || this.startsWith("https://"))
+
+    val isDetailVisible = detailUrl != null
+    val isDetailWebViewActive = isDetailVisible && detailLoadState is LoadState.Success
+
+    val isListWebViewActive =
+        !isDetailVisible &&
+                listLoadState is LoadState.Success &&
+                (listHandle?.currentUrl?.invoke()).isHttpUrl()
+
+    // 검색을 지원하는 탭만 지정 (필요하면 배열로 확장)
+    val searchSupported = currentTab == "home"
+
+    // TopBar 모드 결정: DETAIL > (LIST & searchSupported) > OTHER
+    val topBarMode = when {
+        isDetailWebViewActive -> TopBarMode.DETAIL
+        isListWebViewActive && searchSupported -> TopBarMode.LIST
+        else -> TopBarMode.OTHER
+    }
+
+    // LIST가 아닐 때는 검색창 강제 끔(잔상 방지)
+    val effectiveSearching = isSearching && topBarMode == TopBarMode.LIST
+    if (topBarMode != TopBarMode.LIST && isSearching) {
+        isSearching = false
+    }
+
     Scaffold(
         topBar = {
             AuraTopBar(
-                isSearching = isSearching,
+                mode = topBarMode,
+                isSearching = effectiveSearching,
                 query = query,
-                onSearchToggle = { open -> isSearching = open },
+                onSearchToggle = { open ->
+                    if (topBarMode == TopBarMode.LIST) isSearching = open
+                },
                 onQueryChange = { q -> query = q },
-                onSubmit = { q -> query = q; WebBridge.searchSubmit(q) }
+                onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
+                onShareClick = {
+                    val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
+                    shareLink(ctx, current)
+                },
+                onBackClick = {
+                    // DETAIL 왼쪽 뒤로가기 버튼
+                    closeDetailAndEnsureListVisible()
+                }
             )
         },
         bottomBar = {
             AuraBottomBar(
                 current = currentTab,
-                onSelect = { tab -> currentTab = tab; WebBridge.navigateTo(tab) }
+                onSelect = { tab ->
+                    currentTab = tab
+                    WebBridge.navigateTo(tab)
+                }
             )
         }
     ) { inner ->
         Box(Modifier.padding(inner)) {
+            // 목록 (SPA이므로 항상 존재)
             NoticeListWebView(
                 entryUrl = frontEntryUrl,
                 onOpenNotice = { url -> detailUrl = url },
@@ -121,6 +170,8 @@ fun AuraContainer(
                 onLoadStateChange = { st -> listLoadState = st },
                 onHandleReady = { handle -> listHandle = handle },
             )
+
+            // 상세 (오버레이)
             if (detailUrl != null) {
                 NoticeDetailWebView(
                     url = detailUrl!!,
@@ -130,6 +181,7 @@ fun AuraContainer(
                 )
             }
 
+            // 목록 로딩/에러 (상세 아닐 때)
             if (detailUrl == null) {
                 when (val st = listLoadState) {
                     is LoadState.Loading, LoadState.Idle ->
@@ -144,6 +196,7 @@ fun AuraContainer(
                 }
             }
 
+            // 상세 로딩/에러 (상세일 때)
             if (detailUrl != null) {
                 when (val st = detailLoadState) {
                     is LoadState.Loading, LoadState.Idle ->
