@@ -21,6 +21,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -30,11 +32,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.key.key
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import kotlinx.coroutines.delay
 
 @Composable
 fun AuraTopBar(
@@ -105,6 +104,15 @@ fun AuraTopBar(
                         }
                     }
                 } else {
+                    // <<< 키보드 컨트롤러와 포커스 리퀘스터 가져오기
+                    val keyboardController = LocalSoftwareKeyboardController.current
+                    val focusRequester = remember { FocusRequester() }
+
+                    // <<< 검색창이 나타나면(Composition되면) 포커스를 요청
+                    LaunchedEffect(Unit) {
+                        delay(100) // 애니메이션 효과 등을 고려하여 약간의 딜레이 후 요청
+                        focusRequester.requestFocus()
+                    }
                     // 검색 모드 탑바
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -127,8 +135,8 @@ fun AuraTopBar(
                             singleLine = true,
                             modifier = Modifier
                                 .padding(start = 4.dp)
-                                .weight(1f),                           // ← 원하시는 UI 유지를 위해 weight 사용
-
+                                .weight(1f)                           // ← 원하시는 UI 유지를 위해 weight 사용
+                                .focusRequester(focusRequester),
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color(0xFFF4F6F8),
                                 unfocusedContainerColor = Color(0xFFF4F6F8),
@@ -138,12 +146,18 @@ fun AuraTopBar(
                             ),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
-                                onSearch = { onSubmit(tfv.text) }
+                                onSearch = {
+                                    keyboardController?.hide()
+                                    onSubmit(tfv.text)
+                                }
                             )
                         )
                         // 우측: 명시적 검색 버튼
                         IconButton(
-                            onClick = { onSubmit(tfv.text) },
+                            onClick = {
+                                keyboardController?.hide()
+                                onSubmit(tfv.text)
+                            },
                             modifier = Modifier.padding(start = 4.dp)
                         ) {
                             Icon(Icons.Outlined.Search, contentDescription = "검색 실행")
@@ -152,6 +166,5 @@ fun AuraTopBar(
                 }
             }
         }
-        HorizontalDivider(color = Color(0x11000000))
     }
 }
