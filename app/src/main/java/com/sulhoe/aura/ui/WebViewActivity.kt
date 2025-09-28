@@ -82,9 +82,7 @@ private fun AuraScaffold(
 
     // 기존 AuraContainer 내용을 그대로 사용하지만 entryUrl은 함수로
     AuraContainer(
-        frontOrigin = frontOrigin,
         apiOrigin = apiOrigin,
-        appScheme = appScheme,
         frontEntryUrl = frontEntryUrl()
     )
 }

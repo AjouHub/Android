@@ -1,3 +1,4 @@
+// AuraBottomBar.kt
 package com.sulhoe.aura.ui.components
 
 import androidx.compose.foundation.background
