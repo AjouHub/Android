@@ -104,6 +104,13 @@ fun AuraContainer(
     fun String?.isHttpUrl(): Boolean =
         !this.isNullOrBlank() && (this.startsWith("http://") || this.startsWith("https://"))
 
+    // 알림에서 온 link를 상세 페이지로
+    DisposableEffect(Unit) {
+        val prev = WebBridge.openDetail
+        WebBridge.openDetail = { url -> detailUrl = url }
+        onDispose { WebBridge.openDetail = prev }
+    }
+
     val isDetailVisible = detailUrl != null
     val isDetailWebViewActive = isDetailVisible && detailLoadState is LoadState.Success
 

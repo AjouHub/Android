@@ -25,11 +25,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.common.LoadState
 
 @SuppressLint("StaticFieldLeak")
 object WebBridge {
     var listWebView: WebView? = null
+
+    // 네이티브가 상세 오픈을 요청할 때 호출할 훅 (AuraContainer가 등록)
+    var openDetail: ((String) -> Unit)? = null
 
     fun navigateTo(tab: String) {
         listWebView?.evaluateJavascript(
@@ -102,6 +106,14 @@ fun NoticeListWebView(
                     @JavascriptInterface fun openNotice(url: String) = onOpenNotice(url)
                     @JavascriptInterface fun reauth() { onReauthRequest?.invoke() }
                     @JavascriptInterface fun logout() { onLogoutRequest?.invoke() }
+
+                    // settings 라우트에서 호출
+                    @JavascriptInterface fun ensureUserTopic(userId: Long) {
+                        TopicManager.ensureUserTopic(context, userId)
+                    }
+                    @JavascriptInterface fun applyTypeMode(type: String, mode: String) {
+                        TopicManager.applyTypeMode(context, type, mode)
+                    }
                 }, "AURA")
 
                 webChromeClient = object : WebChromeClient() {

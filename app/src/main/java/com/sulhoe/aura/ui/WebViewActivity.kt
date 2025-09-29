@@ -19,17 +19,21 @@ import com.sulhoe.aura.ui.web.WebBridge
 class WebViewActivity : ComponentActivity() {
 
     private val pendingDeepLink = mutableStateOf<Uri?>(null)
+    private val pendingNavUrl = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         pendingDeepLink.value = intent?.data
+        extractNavUrlFromExtras(intent)
 
         setContent {
             AURATheme {
                 AuraScaffold(
                     pendingDeepLink = pendingDeepLink.value,
-                    clearPendingDeepLink = { pendingDeepLink.value = null }
+                    pendingNavUrl = pendingNavUrl.value,
+                    clearPendingDeepLink = { pendingDeepLink.value = null },
+                    clearPendingNavUrl = { pendingNavUrl.value = null }
                 )
             }
         }
@@ -40,19 +44,24 @@ class WebViewActivity : ComponentActivity() {
         setIntent(intent)
         pendingDeepLink.value = intent.data
     }
+
+    private fun extractNavUrlFromExtras(intent: Intent?) {
+        if (intent == null) return
+        val link = intent.getStringExtra("link")
+        if (!link.isNullOrBlank()) pendingNavUrl.value = link
+    }
 }
 
 // 아래는 기존 AuraContainer 대체: 딥링크를 받아 bridge를 로드
 @Composable
 private fun AuraScaffold(
     pendingDeepLink: Uri?,
-    clearPendingDeepLink: () -> Unit
+    pendingNavUrl: String?,
+    clearPendingDeepLink: () -> Unit,
+    clearPendingNavUrl: () -> Unit
 ) {
     val ctx = LocalContext.current
-    val frontOrigin = remember {
-        val u = Uri.parse(ctx.getString(R.string.frontend_url))
-        "${u.scheme}://${u.authority}"
-    }
+
     val apiOrigin = remember {
         val u = Uri.parse(ctx.getString(R.string.api_base_url))
         "${u.scheme}://${u.authority}"
@@ -78,6 +87,13 @@ private fun AuraScaffold(
                 frontEntryUrl()
             WebBridge.load(bridgeUrl)
         }
+    }
+
+    // 2) 알림 클릭: 상세로 바로 열기
+    LaunchedEffect(pendingNavUrl) {
+        val target = pendingNavUrl ?: return@LaunchedEffect
+        clearPendingNavUrl()
+        WebBridge.openDetail?.invoke(target)  // ← 목록이 아니라 상세 오버레이로
     }
 
     // 기존 AuraContainer 내용을 그대로 사용하지만 entryUrl은 함수로

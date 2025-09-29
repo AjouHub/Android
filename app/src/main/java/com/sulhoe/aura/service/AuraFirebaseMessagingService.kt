@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sulhoe.aura.R
+import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.WebViewActivity
 
 class AuraFirebaseMessagingService : FirebaseMessagingService() {
@@ -20,9 +21,12 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
     private val TAG = "FCM"
 
     override fun onNewToken(token: String) {
+        super.onNewToken(token)
         Log.d(TAG, "FCM token refreshed: $token")
         getSharedPreferences("app", MODE_PRIVATE).edit().putString("fcm_token", token).apply()
-        // TODO: 서버 전송
+        // 컨테이너 구조: 원하는 토픽 집합 재구독(안전망)
+        TopicManager.resync(applicationContext)
+        // (선택) 로그인 이후 userId를 알게 되면 ensureUserTopic(userId)도 한 번 호출
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
@@ -46,12 +50,11 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         val uniId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
 
         val intent = Intent(this, WebViewActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
-            data.forEach { (k, v) -> putExtra(k, v) }
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            data.forEach { (k, v) -> putExtra(k, v) } // type, link, etc.
         }
 
-        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
-                (PendingIntent.FLAG_IMMUTABLE)
+        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         val pendingIntent = PendingIntent.getActivity(this, uniId, intent, pendingFlags)
 
         val channelId = when {
@@ -63,9 +66,10 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info) // 추후 벡터 아이콘으로 교체 권장
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // TODO: 앱 벡터 아이콘으로 교체 권장
             .setContentTitle(title)
             .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body)) // 긴 본문 표시
             .setAutoCancel(true)
             .setSound(soundUri) // Pre-O 호환
             .setContentIntent(pendingIntent)
