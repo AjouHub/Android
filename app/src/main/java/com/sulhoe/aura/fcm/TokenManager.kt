@@ -33,8 +33,12 @@ object TopicManager {
             .replace("-{2,}".toRegex(), "-")
     }
 
-    fun ensureUserTopic(ctx: Context, userId: Long) {
-        subscribe(ctx, "user-$userId")
+    fun ensureUserTopic(ctx: Context, email: String?) {
+        if (email.isNullOrBlank()) {
+            Log.w(TAG, "ensureUserTopic: email is blank, skip subscribing.")
+            return
+        }
+        subscribe(ctx, "user-${sanitizeSegment(email)}")
     }
 
     fun applyTypeMode(ctx: Context, type: String, mode: String) {

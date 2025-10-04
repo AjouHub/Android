@@ -35,8 +35,9 @@ fun AuraContainer(
     frontEntryUrl: String
 ) {
     val ctx = LocalContext.current
+    var isFullScreen by remember { mutableStateOf(false) }
 
-    var currentTab by remember { mutableStateOf("home") } // 현재 선택 탭
+    var currentTab by remember { mutableStateOf("home") }
     var detailUrl by remember { mutableStateOf<String?>(null) }
 
     var isSearching by remember { mutableStateOf(false) }
@@ -104,59 +105,51 @@ fun AuraContainer(
     fun String?.isHttpUrl(): Boolean =
         !this.isNullOrBlank() && (this.startsWith("http://") || this.startsWith("https://"))
 
-    // 알림에서 온 link를 상세 페이지로
+    /* 상세 오프너 등록: FCM 큐 소진까지 */
     DisposableEffect(Unit) {
-        val prev = WebBridge.openDetail
-        WebBridge.openDetail = { url -> detailUrl = url }
-        onDispose { WebBridge.openDetail = prev }
+        WebBridge.setDetailOpener { url -> detailUrl = url }
+        onDispose { WebBridge.clearDetailOpener() }
     }
 
     val isDetailVisible = detailUrl != null
-    val isDetailWebViewActive = isDetailVisible && detailLoadState is LoadState.Success
+    val listVisible   = !isDetailVisible && (listLoadState is LoadState.Success)
+    val detailVisible =  isDetailVisible && (detailLoadState is LoadState.Success)
 
-    val isListWebViewActive =
-        !isDetailVisible &&
-                listLoadState is LoadState.Success &&
-                (listHandle?.currentUrl?.invoke()).isHttpUrl()
-
-    // 검색을 지원하는 탭만 지정 (필요하면 배열로 확장)
+    // 검색 지원 탭
     val searchSupported = currentTab == "home"
 
-    // TopBar 모드 결정: DETAIL > (LIST & searchSupported) > OTHER
     val topBarMode = when {
-        isDetailWebViewActive -> TopBarMode.DETAIL
-        isListWebViewActive && searchSupported -> TopBarMode.LIST
+        detailVisible -> TopBarMode.DETAIL
+        listVisible && searchSupported -> TopBarMode.LIST
         else -> TopBarMode.OTHER
     }
 
-    // LIST가 아닐 때는 검색창 강제 끔(잔상 방지)
     val effectiveSearching = isSearching && topBarMode == TopBarMode.LIST
-    if (topBarMode != TopBarMode.LIST && isSearching) {
-        isSearching = false
-    }
+    if (topBarMode != TopBarMode.LIST && isSearching) isSearching = false
 
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
         topBar = {
-            AuraTopBar(
-                mode = topBarMode,
-                isSearching = effectiveSearching,
-                query = query,
-                onSearchToggle = { open ->
-                    if (topBarMode == TopBarMode.LIST) isSearching = open
-                },
-                onQueryChange = { q -> query = q },
-                onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
-                onShareClick = {
-                    val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
-                    shareLink(ctx, current)
-                },
-                onBackClick = {
-                    // DETAIL 왼쪽 뒤로가기 버튼
-                    closeDetailAndEnsureListVisible()
-                }
-            )
+            if (!isFullScreen) {
+                AuraTopBar(
+                    mode = topBarMode,
+                    isSearching = effectiveSearching,
+                    query = query,
+                    onSearchToggle = { open ->
+                        if (topBarMode == TopBarMode.LIST) isSearching = open
+                    },
+                    onQueryChange = { q -> query = q },
+                    onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
+                    onShareClick = {
+                        val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
+                        shareLink(ctx, current)
+                    },
+                    onBackClick = { closeDetailAndEnsureListVisible() }
+                )
+            }
         },
         bottomBar = {
+            if (!isFullScreen) {
             AuraBottomBar(
                 current = currentTab,
                 onSelect = { tab ->
@@ -165,11 +158,33 @@ fun AuraContainer(
                 }
             )
         }
+        }
     ) { inner ->
-        Box(Modifier.padding(inner)) {
-            // 목록 (SPA이므로 항상 존재)
+        // ★ 풀스크린이면 inner padding 제거
+        val contentPadding = if (isFullScreen) androidx.compose.foundation.layout.PaddingValues()
+        else inner
+
+        Box(Modifier.padding(contentPadding)) {
+
+            // 목록 (SPA)
             NoticeListWebView(
                 entryUrl = frontEntryUrl,
+                visible = listVisible, // ★ 성공시에만 보이게
+                onUrlChanged = { url ->
+                    val u = runCatching { Uri.parse(url) }.getOrNull()
+                    val path = u?.path.orEmpty()
+                    val frag = u?.fragment.orEmpty()     // 해시 라우팅 대응
+
+                    val looksLikeLoginRoute =
+                        path.startsWith("/login") ||
+                                frag.startsWith("/login") ||     // e.g. #/login
+                                frag.contains("login")           // e.g. #/?view=login 등
+
+                    // 홈('/')인데 아직 로그인 안 된 상태면 로그인 히어로 화면으로 간주 → 풀스크린
+                    val isHomeAndUnauthed = (path.isEmpty() || path == "/") && !hasBackendSessionCookie()
+
+                    isFullScreen = looksLikeLoginRoute || isHomeAndUnauthed
+                },
                 onOpenNotice = { url -> detailUrl = url },
                 onReauthRequest = { reauthFlow() },
                 onLogoutRequest = { logoutFlow() },
@@ -182,6 +197,7 @@ fun AuraContainer(
             if (detailUrl != null) {
                 NoticeDetailWebView(
                     url = detailUrl!!,
+                    visible = detailVisible, // ★ 성공시에만 보이게
                     onClose = { closeDetailAndEnsureListVisible() },
                     onLoadStateChange = { st -> detailLoadState = st },
                     onHandleReady = { handle -> detailHandle = handle },

@@ -8,11 +8,16 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.util.Log
+import com.google.firebase.messaging.FirebaseMessaging
+import com.sulhoe.aura.fcm.TopicManager
 
 class AuraApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannelsIfNeeded()
+        TopicManager.subscribe(applicationContext, "system")
+        TopicManager.subscribe(applicationContext, "broadcast")
     }
 
     private fun createNotificationChannelsIfNeeded() {

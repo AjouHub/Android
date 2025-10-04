@@ -26,7 +26,6 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         getSharedPreferences("app", MODE_PRIVATE).edit().putString("fcm_token", token).apply()
         // 컨테이너 구조: 원하는 토픽 집합 재구독(안전망)
         TopicManager.resync(applicationContext)
-        // (선택) 로그인 이후 userId를 알게 되면 ensureUserTopic(userId)도 한 번 호출
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
@@ -50,11 +49,22 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         val uniId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
 
         val intent = Intent(this, WebViewActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+            // PendingIntent 식별 충돌 방지용 고유 action
+            action = "com.sulhoe.aura.OPEN_LINK.$uniId"
+
+            // FCM date 전달
             data.forEach { (k, v) -> putExtra(k, v) } // type, link, etc.
         }
 
-        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        // 최신 extras가 항상 반영되도록 UPDATE_CURRENT 추가
+        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
+                PendingIntent.FLAG_IMMUTABLE or
+                PendingIntent.FLAG_UPDATE_CURRENT
+
         val pendingIntent = PendingIntent.getActivity(this, uniId, intent, pendingFlags)
 
         val channelId = when {

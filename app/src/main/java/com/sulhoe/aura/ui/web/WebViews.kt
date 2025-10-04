@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
@@ -28,12 +29,35 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.common.LoadState
 
+/* ===================== WebBridge ===================== */
+
 @SuppressLint("StaticFieldLeak")
 object WebBridge {
     var listWebView: WebView? = null
 
-    // 네이티브가 상세 오픈을 요청할 때 호출할 훅 (AuraContainer가 등록)
+    /** 상세 오픈 훅(컨테이너가 등록) */
     var openDetail: ((String) -> Unit)? = null
+        private set
+
+    /** FCM 등에서 먼저 온 상세 요청을 보관하는 큐 */
+    private var pendingDetailUrl: String? = null
+
+    /** 상세 열기 요청(준비 전이면 큐에 저장) */
+    fun requestOpenDetail(url: String) {
+        val opener = openDetail
+        if (opener != null) opener(url) else pendingDetailUrl = url
+    }
+
+    /** 컨테이너가 상세 오프너를 등록할 때 호출 */
+    fun setDetailOpener(opener: (String) -> Unit) {
+        openDetail = opener
+        pendingDetailUrl?.let {
+            opener(it)
+            pendingDetailUrl = null
+        }
+    }
+
+    fun clearDetailOpener() { openDetail = null }
 
     fun navigateTo(tab: String) {
         listWebView?.evaluateJavascript(
@@ -63,16 +87,20 @@ object WebBridge {
     private fun json(s: String) = "\"" + s.replace("\"", "\\\"") + "\""
 }
 
+/* ===================== 공통 유틸 ===================== */
+
 private const val ABOUT_BLANK = "about:blank"
 private fun Uri?.isHttpOrHttps(): Boolean =
     this != null && (scheme.equals("http", true) || scheme.equals("https", true))
 
-/* ----------------------- 목록 ----------------------- */
+/* ===================== 목록 WebView ===================== */
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun NoticeListWebView(
     entryUrl: String,
+    visible: Boolean, // ★ 성공 상태에서만 VISIBLE
+    onUrlChanged: (String) -> Unit,
     onOpenNotice: (String) -> Unit,
     onProgress: (Float) -> Unit = {},
     onReauthRequest: (() -> Unit)? = null,
@@ -99,6 +127,11 @@ fun NoticeListWebView(
                 settings.userAgentString += " AURA-App"
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.setSupportZoom(false)
+                settings.textZoom = 100
+
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
@@ -106,14 +139,13 @@ fun NoticeListWebView(
                     @JavascriptInterface fun openNotice(url: String) = onOpenNotice(url)
                     @JavascriptInterface fun reauth() { onReauthRequest?.invoke() }
                     @JavascriptInterface fun logout() { onLogoutRequest?.invoke() }
-
-                    // settings 라우트에서 호출
-                    @JavascriptInterface fun ensureUserTopic(userId: Long) {
-                        TopicManager.ensureUserTopic(context, userId)
+                    @JavascriptInterface fun ensureUserTopic(email: String?) {
+                        TopicManager.ensureUserTopic(context, email)
                     }
                     @JavascriptInterface fun applyTypeMode(type: String, mode: String) {
                         TopicManager.applyTypeMode(context, type, mode)
                     }
+                    @JavascriptInterface fun routeChanged(url: String) { onUrlChanged(url) }
                 }, "AURA")
 
                 webChromeClient = object : WebChromeClient() {
@@ -131,11 +163,32 @@ fun NoticeListWebView(
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         hadMainFrameError = false
                         lastUrl = url
+                        onUrlChanged(url)
                         onLoadStateChange(LoadState.Loading)
                     }
                     override fun onPageFinished(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
+
+                        //   로그인 페이지가 CSR이면 경로 변경도 잡아냄
+                        val hook = """
+                            (function(){
+                              if (window.__AURA_HOOKED__) return;
+                              window.__AURA_HOOKED__ = true;
+                              const notify = () => { try { AURA.routeChanged(location.href); } catch(e){} };
+                              ['pushState','replaceState'].forEach(function(fn){
+                                const orig = history[fn];
+                                history[fn] = function(){
+                                  const ret = orig.apply(this, arguments);
+                                  notify();
+                                  return ret;
+                                }
+                              });
+                              window.addEventListener('popstate', notify);
+                              notify();
+                            })();
+                        """.trimIndent()
+                        view?.evaluateJavascript(hook, null)
                     }
                     override fun onPageCommitVisible(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
@@ -212,6 +265,9 @@ fun NoticeListWebView(
                     }
                 }
 
+                // 초기가시성
+                visibility = if (visible) View.VISIBLE else View.GONE
+
                 val self = this
                 onHandleReady(
                     WebViewHandle(
@@ -228,18 +284,23 @@ fun NoticeListWebView(
                 )
 
                 onLoadStateChange(LoadState.Loading)
+                onUrlChanged(entryUrl)
                 loadUrl(entryUrl)
             }
+        },
+        update = { view ->
+            view.visibility = if (visible) View.VISIBLE else View.GONE
         }
     )
 }
 
-/* ----------------------- 상세 ----------------------- */
+/* ===================== 상세 WebView ===================== */
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun NoticeDetailWebView(
     url: String,
+    visible: Boolean, // ★ 성공 상태에서만 VISIBLE
     onClose: () -> Unit,
     onLoadStateChange: (LoadState) -> Unit,
     onHandleReady: (WebViewHandle) -> Unit,
@@ -276,7 +337,6 @@ fun NoticeDetailWebView(
                             view?.stopLoading(); onClose(); return
                         }
                         if (isClearingToBlank && url == ABOUT_BLANK) return
-
                         hadMainFrameError = false
                         lastUrl = url
                         onLoadStateChange(LoadState.Loading)
@@ -295,8 +355,7 @@ fun NoticeDetailWebView(
                         isClearingToBlank = true
                         view?.stopLoading()
                         view?.loadUrl(ABOUT_BLANK)
-                        // 🔒 흰페이지가 '뒤로가기 대상'이 안 되도록 즉시 역사 제거
-                        view?.clearHistory()
+                        view?.clearHistory() // blank가 뒤로가기에 남지 않도록
                         onLoadStateChange(
                             LoadState.Error(
                                 statusCode = status,
@@ -343,6 +402,9 @@ fun NoticeDetailWebView(
 
                 webChromeClient = object : WebChromeClient() {}
 
+                // 초기가시성
+                visibility = if (visible) View.VISIBLE else View.GONE
+
                 val self = this
                 onHandleReady(
                     WebViewHandle(
@@ -361,6 +423,9 @@ fun NoticeDetailWebView(
                 onLoadStateChange(LoadState.Loading)
                 loadUrl(url)
             }
+        },
+        update = { view ->
+            view.visibility = if (visible) View.VISIBLE else View.GONE
         }
     )
 }
