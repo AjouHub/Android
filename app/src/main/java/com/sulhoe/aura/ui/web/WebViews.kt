@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.common.LoadState
+import java.io.ByteArrayInputStream
 
 /* ===================== WebBridge ===================== */
 
@@ -99,7 +100,7 @@ private fun Uri?.isHttpOrHttps(): Boolean =
 @Composable
 fun NoticeListWebView(
     entryUrl: String,
-    visible: Boolean, // ★ 성공 상태에서만 VISIBLE
+    visible: Boolean,
     onUrlChanged: (String) -> Unit,
     onOpenNotice: (String) -> Unit,
     onProgress: (Float) -> Unit = {},
@@ -108,7 +109,7 @@ fun NoticeListWebView(
     onOAuthRequest: (() -> Unit)? = null,
     onLoadStateChange: (LoadState) -> Unit,
     onHandleReady: (WebViewHandle) -> Unit,
-    onOnboardingComplete: (() -> Unit)? = null, // ✅ 새로 추가
+    onOnboardingComplete: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
 
@@ -147,8 +148,6 @@ fun NoticeListWebView(
                         TopicManager.applyTypeMode(context, type, mode)
                     }
                     @JavascriptInterface fun routeChanged(url: String) { onUrlChanged(url) }
-
-                    // 수정: 콜백만 호출
                     @JavascriptInterface fun onboardingComplete() {
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
                             onOnboardingComplete?.invoke()
@@ -160,12 +159,10 @@ fun NoticeListWebView(
                     override fun onProgressChanged(view: WebView?, newProgress: Int) {
                         onProgress(newProgress.coerceIn(0, 100) / 100f)
                     }
-                    // console.log를 Logcat으로 출력
                     override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
                         msg?.let {
                             val tag = "WebView-Console"
                             val message = "[${it.sourceId()}:${it.lineNumber()}] ${it.message()}"
-
                             when (it.messageLevel()) {
                                 android.webkit.ConsoleMessage.MessageLevel.ERROR ->
                                     android.util.Log.e(tag, message)
@@ -180,22 +177,78 @@ fun NoticeListWebView(
                 }
 
                 webViewClient = object : WebViewClient() {
+
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): WebResourceResponse? {
+                        val url = request?.url?.toString() ?: return null
+                        val isMain = request?.isForMainFrame == true
+                        if (isMain) return null
+
+                        val headers = request?.requestHeaders ?: emptyMap()
+                        val origin  = headers["Origin"] ?: "https://aura-front.code0.ai.kr"
+                        // ✅ XHR/Fetch 추정 헤더
+                        val isFetchOrXhr =
+                            headers["Sec-Fetch-Dest"]?.equals("empty", true) == true ||
+                                    headers["X-Requested-With"]?.equals("XMLHttpRequest", true) == true ||
+                                    (headers["Accept"]?.contains("application/json", ignoreCase = true) == true)
+
+                        if (isFetchOrXhr && (url.contains("/api/auth/google") || url.contains("accounts.google.com"))) {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post { onOAuthRequest?.invoke() }
+                            return WebResourceResponse(
+                                "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                            ).apply {
+                                responseHeaders = mapOf(
+                                    "Access-Control-Allow-Origin" to origin,
+                                    "Access-Control-Allow-Credentials" to "true",
+                                    "Cache-Control" to "no-store",
+                                    "Vary" to "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+                                )
+                                setStatusCodeAndReasonPhrase(204, "No Content")
+                            }
+                        }
+
+                        if (request?.method.equals("OPTIONS", true) && url.contains("/api/auth/google")) {
+                            return WebResourceResponse(
+                                "text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))
+                            ).apply {
+                                responseHeaders = mapOf(
+                                    "Access-Control-Allow-Origin" to origin,
+                                    "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+                                    "Access-Control-Allow-Headers" to "Content-Type, Authorization",
+                                    "Access-Control-Allow-Credentials" to "true",
+                                    "Vary" to "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+                                )
+                                setStatusCodeAndReasonPhrase(204, "No Content")
+                            }
+                        }
+
+                        return null
+                    }
+
+                    // 안전장치: 메인프레임으로 구글 이동 시도 차단
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         url ?: return
-                        if (url.contains("/auth/google") || url.contains("accounts.google.com")) {
-                            view?.stopLoading(); onOAuthRequest?.invoke(); return
+                        if (url.contains("accounts.google.com") || url.contains("/api/auth/google")) {
+                            android.util.Log.w("WebView", "⛔ Blocking in onPageStarted: $url")
+                            view?.stopLoading()
+                            onOAuthRequest?.invoke()
+                            return
                         }
+
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         hadMainFrameError = false
                         lastUrl = url
                         onUrlChanged(url)
                         onLoadStateChange(LoadState.Loading)
                     }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
 
-                        //   로그인 페이지가 CSR이면 경로 변경도 잡아냄
+                        // SPA 라우팅 감지 훅
                         val hook = """
                             (function(){
                               if (window.__AURA_HOOKED__) return;
@@ -215,14 +268,34 @@ fun NoticeListWebView(
                         """.trimIndent()
                         view?.evaluateJavascript(hook, null)
                     }
+
                     override fun onPageCommitVisible(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
                     }
+
                     override fun onReceivedHttpError(
                         view: WebView?, request: WebResourceRequest?, resp: WebResourceResponse?
                     ) {
                         if (request?.isForMainFrame == true) {
+                            val url = request.url?.toString() ?: ""
+
+                            // 구글 에러 페이지는 바로 차단 후 복구
+                            if (url.contains("accounts.google.com")) {
+                                android.util.Log.e("WebView", "⛔ Google error page blocked")
+                                hadMainFrameError = true
+                                isClearingToBlank = true
+                                view?.stopLoading()
+                                view?.loadUrl(ABOUT_BLANK)
+                                view?.postDelayed({
+                                    val fallbackUrl = if (!lastUrl.contains("accounts.google.com")) {
+                                        lastUrl
+                                    } else entryUrl
+                                    WebBridge.load(fallbackUrl)
+                                }, 500)
+                                return
+                            }
+
                             hadMainFrameError = true
                             isClearingToBlank = true
                             view?.stopLoading()
@@ -236,6 +309,7 @@ fun NoticeListWebView(
                             )
                         }
                     }
+
                     override fun onReceivedError(
                         view: WebView?, request: WebResourceRequest?, err: WebResourceError?
                     ) {
@@ -252,6 +326,7 @@ fun NoticeListWebView(
                             )
                         }
                     }
+
                     @Deprecated("for < M")
                     override fun onReceivedError(
                         view: WebView?, code: Int, desc: String?, failingUrl: String?
@@ -268,6 +343,7 @@ fun NoticeListWebView(
                             )
                         )
                     }
+
                     override fun onReceivedSslError(
                         view: WebView?, handler: SslErrorHandler?, error: SslError?
                     ) {
@@ -280,17 +356,26 @@ fun NoticeListWebView(
                             LoadState.Error(message = "SSL 오류", failingUrl = error?.url)
                         )
                     }
+
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val u = request?.url ?: return false
-                        lastUrl = u.toString()
+                        val urlStr = u.toString()
+                        lastUrl = urlStr
+
+                        if (urlStr.contains("accounts.google.com") || urlStr.contains("/api/auth/google")) {
+                            android.util.Log.d("WebView", "⛔ Blocking in shouldOverrideUrlLoading: $urlStr")
+                            onOAuthRequest?.invoke()
+                            return true
+                        }
+
                         if (!u.isHttpOrHttps()) {
-                            ctx.startActivity(Intent(Intent.ACTION_VIEW, u)); return true
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, u))
+                            return true
                         }
                         return false
                     }
                 }
 
-                // 초기가시성
                 visibility = if (visible) View.VISIBLE else View.GONE
 
                 val self = this
@@ -325,7 +410,7 @@ fun NoticeListWebView(
 @Composable
 fun NoticeDetailWebView(
     url: String,
-    visible: Boolean, // ★ 성공 상태에서만 VISIBLE
+    visible: Boolean,
     onClose: () -> Unit,
     onLoadStateChange: (LoadState) -> Unit,
     onHandleReady: (WebViewHandle) -> Unit,
@@ -337,7 +422,6 @@ fun NoticeDetailWebView(
     var isClearingToBlank by remember { mutableStateOf(false) }
     var lastUrl by remember { mutableStateOf(url) }
 
-    // 상세는 "뒤로가기 = 항상 닫기"
     BackHandler(enabled = true) { onClose() }
 
     AndroidView(
@@ -359,17 +443,21 @@ fun NoticeDetailWebView(
                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                         url ?: return
                         if (url.contains("/auth/google") || url.contains("accounts.google.com")) {
-                            view?.stopLoading(); onClose(); return
+                            view?.stopLoading()
+                            onClose()
+                            return
                         }
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         hadMainFrameError = false
                         lastUrl = url
                         onLoadStateChange(LoadState.Loading)
                     }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
                     }
+
                     override fun onPageCommitVisible(view: WebView?, url: String?) {
                         if (isClearingToBlank && url == ABOUT_BLANK) return
                         if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
@@ -380,7 +468,7 @@ fun NoticeDetailWebView(
                         isClearingToBlank = true
                         view?.stopLoading()
                         view?.loadUrl(ABOUT_BLANK)
-                        view?.clearHistory() // blank가 뒤로가기에 남지 않도록
+                        view?.clearHistory()
                         onLoadStateChange(
                             LoadState.Error(
                                 statusCode = status,
@@ -397,6 +485,7 @@ fun NoticeDetailWebView(
                             showError(view, resp?.statusCode, resp?.reasonPhrase ?: "HTTP 오류", request.url?.toString())
                         }
                     }
+
                     override fun onReceivedError(
                         view: WebView?, request: WebResourceRequest?, err: WebResourceError?
                     ) {
@@ -404,12 +493,14 @@ fun NoticeDetailWebView(
                             showError(view, null, err?.description?.toString(), request.url?.toString())
                         }
                     }
+
                     @Deprecated("for < M")
                     override fun onReceivedError(
                         view: WebView?, code: Int, desc: String?, failingUrl: String?
                     ) {
                         showError(view, code, desc, failingUrl)
                     }
+
                     override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                         handler?.cancel()
                         showError(view, null, "SSL 오류", error?.url)
@@ -419,7 +510,8 @@ fun NoticeDetailWebView(
                         val u = request?.url ?: return false
                         lastUrl = u.toString()
                         if (!u.isHttpOrHttps()) {
-                            ctx.startActivity(Intent(Intent.ACTION_VIEW, u)); return true
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, u))
+                            return true
                         }
                         return false
                     }
@@ -427,7 +519,6 @@ fun NoticeDetailWebView(
 
                 webChromeClient = object : WebChromeClient() {}
 
-                // 초기가시성
                 visibility = if (visible) View.VISIBLE else View.GONE
 
                 val self = this

@@ -88,16 +88,43 @@ private fun AuraScaffold(
         val data = pendingDeepLink ?: return@LaunchedEffect
         clearPendingDeepLink()
         val host = ctx.getString(R.string.app_oauth_host)
+
         if (data.scheme == appScheme && data.host == host) {
+            val errorCode = data.getQueryParameter("error")
+            val errorMessage = data.getQueryParameter("message")
+
+            if (errorCode != null) {
+                // ✅ hash 라우팅 + search 제거 (새로고침 금지)
+                val errHash = "/auth/error?code=${Uri.encode(errorCode)}&message=${Uri.encode(errorMessage ?: "로그인에 실패했습니다.")}"
+                val js = """
+                (function(){
+                  var h = '#$errHash';
+                  // 쿼리스트링 제거 (embed=app만 남기고 싶다면 필요한 값만 재조합하세요)
+                  if (location.search) {
+                    history.replaceState({}, '', location.origin + location.pathname + h);
+                  } else {
+                    history.pushState({}, '', h);
+                  }
+                  window.dispatchEvent(new Event('popstate'));
+                })();
+            """.trimIndent()
+
+                if (WebBridge.listWebView != null) {
+                    WebBridge.listWebView?.evaluateJavascript(js, null)
+                } else {
+                    // 초기 구동 폴백만 loadUrl
+                    WebBridge.load(frontEntryUrl() + "#$errHash")
+                }
+                return@LaunchedEffect
+            }
+
             val code = data.getQueryParameter("code")
             val bridgeUrl = if (!code.isNullOrEmpty())
                 "$apiAuth/sso/bridge?code=$code"
             else
                 frontEntryUrl()
-            android.util.Log.d("AuraScaffold", "Loading bridge URL: $bridgeUrl")
+
             WebBridge.load(bridgeUrl)
-        } else {
-            android.util.Log.w("AuraScaffold", "Unmatched deeplink scheme/host")
         }
     }
 
@@ -106,7 +133,7 @@ private fun AuraScaffold(
         val target = pendingNavUrl ?: return@LaunchedEffect
         android.util.Log.d("AuraScaffold", "FCM navigation to: $target")
         clearPendingNavUrl()
-        WebBridge.requestOpenDetail(target) // 준비 전이면 큐에 저장
+        WebBridge.requestOpenDetail(target)
     }
 
     AuraContainer(
