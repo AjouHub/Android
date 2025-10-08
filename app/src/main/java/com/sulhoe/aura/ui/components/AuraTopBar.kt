@@ -1,5 +1,5 @@
+// AuraTopBar.kt
 package com.sulhoe.aura.ui.components
-
 import android.annotation.SuppressLint
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent

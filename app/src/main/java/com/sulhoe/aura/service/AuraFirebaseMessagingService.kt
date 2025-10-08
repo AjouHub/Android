@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sulhoe.aura.R
+import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.WebViewActivity
 
 class AuraFirebaseMessagingService : FirebaseMessagingService() {
@@ -20,9 +21,11 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
     private val TAG = "FCM"
 
     override fun onNewToken(token: String) {
+        super.onNewToken(token)
         Log.d(TAG, "FCM token refreshed: $token")
         getSharedPreferences("app", MODE_PRIVATE).edit().putString("fcm_token", token).apply()
-        // TODO: 서버 전송
+        // 컨테이너 구조: 원하는 토픽 집합 재구독(안전망)
+        TopicManager.resync(applicationContext)
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
@@ -46,12 +49,22 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         val uniId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
 
         val intent = Intent(this, WebViewActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
-            data.forEach { (k, v) -> putExtra(k, v) }
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+            // PendingIntent 식별 충돌 방지용 고유 action
+            action = "com.sulhoe.aura.OPEN_LINK.$uniId"
+
+            // FCM date 전달
+            data.forEach { (k, v) -> putExtra(k, v) } // type, link, etc.
         }
 
+        // 최신 extras가 항상 반영되도록 UPDATE_CURRENT 추가
         val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
-                (PendingIntent.FLAG_IMMUTABLE)
+                PendingIntent.FLAG_IMMUTABLE or
+                PendingIntent.FLAG_UPDATE_CURRENT
+
         val pendingIntent = PendingIntent.getActivity(this, uniId, intent, pendingFlags)
 
         val channelId = when {
@@ -63,9 +76,10 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
         val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info) // 추후 벡터 아이콘으로 교체 권장
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // TODO: 앱 벡터 아이콘으로 교체 권장
             .setContentTitle(title)
             .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body)) // 긴 본문 표시
             .setAutoCancel(true)
             .setSound(soundUri) // Pre-O 호환
             .setContentIntent(pendingIntent)

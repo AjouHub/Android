@@ -35,8 +35,9 @@ fun AuraContainer(
     frontEntryUrl: String
 ) {
     val ctx = LocalContext.current
+    var isFullScreen by remember { mutableStateOf(false) }
 
-    var currentTab by remember { mutableStateOf("home") } // 현재 선택 탭
+    var currentTab by remember { mutableStateOf("home") }
     var detailUrl by remember { mutableStateOf<String?>(null) }
 
     var isSearching by remember { mutableStateOf(false) }
@@ -52,10 +53,49 @@ fun AuraContainer(
     var listHandle by remember { mutableStateOf<WebViewHandle?>(null) }
     var detailHandle by remember { mutableStateOf<WebViewHandle?>(null) }
 
+    // 1. hasBackendSessionCookie를 먼저 정의
     fun hasBackendSessionCookie(): Boolean {
-        val cookies = CookieManager.getInstance().getCookie("$apiOrigin/") ?: return false
-        return cookies.split(";").any { it.trim().startsWith("WEB_SESSION=") }
+        val cookies = CookieManager.getInstance().getCookie("$apiOrigin/") ?: ""
+        val hasCookie = cookies.split(";").any { it.trim().startsWith("WEB_SESSION=") }
+
+        android.util.Log.d("AuraContainer", "Session cookie check: $hasCookie (cookies: ${cookies.take(100)}...)")
+        return hasCookie
     }
+
+    // onUrlChanged 로직 개선
+    fun updateFullScreenState(url: String) {
+        android.util.Log.d("AuraContainer", "URL changed: $url")
+        val u = runCatching { Uri.parse(url) }.getOrNull()
+        val path = u?.path.orEmpty()
+        val frag = u?.fragment.orEmpty()
+        val query = u?.query.orEmpty()
+
+        android.util.Log.d("AuraContainer", "Parsed - path: $path, fragment: $frag, query: $query")
+
+        val looksLikeLoginRoute =
+            path.startsWith("/login") ||
+                    frag.startsWith("/login") ||
+                    frag.contains("login")
+
+        // 온보딩 화면 감지 추가
+        val looksLikeOnboarding =
+            path.contains("/select-department") ||
+                    frag.contains("/select-department") ||
+                    frag.contains("select-department")
+
+        val hasSession = hasBackendSessionCookie()
+        val isHomeAndUnauthed = (path.isEmpty() || path == "/") && !hasSession
+
+        android.util.Log.d("AuraContainer", "Flags - login:$looksLikeLoginRoute, onboarding:$looksLikeOnboarding, session:$hasSession, homeUnauth:$isHomeAndUnauthed")
+
+        val newFullScreen = (looksLikeLoginRoute || looksLikeOnboarding || isHomeAndUnauthed) && !hasSession
+
+        if (newFullScreen != isFullScreen) {
+            android.util.Log.d("AuraContainer", "FullScreen changed: $isFullScreen -> $newFullScreen")
+            isFullScreen = newFullScreen
+        }
+    }
+
     fun openOAuthInCustomTab() {
         val now = System.currentTimeMillis()
         if (now - lastOAuthLaunchAt < 6000) return
@@ -85,12 +125,50 @@ fun AuraContainer(
             }
         }, 1000)
     }
+
     fun logoutFlow() {
-        CookieManager.getInstance().removeAllCookies {
-            CookieManager.getInstance().flush()
-            WebBridge.load(frontEntryUrl)
-        }
+        val cookieManager = CookieManager.getInstance()
+        val logoutUrl = "$apiOrigin/api/auth/logout"
+
+        // 1. 백엔드 로그아웃
+        WebBridge.listWebView?.postUrl(logoutUrl, ByteArray(0))
+
+        WebBridge.listWebView?.postDelayed({
+            // 2. 모든 쿠키 삭제
+            cookieManager.removeAllCookies { success ->
+                android.util.Log.d("AuraContainer", "All cookies removed: $success")
+
+                cookieManager.removeSessionCookies { sessionSuccess ->
+                    android.util.Log.d("AuraContainer", "Session cookies removed: $sessionSuccess")
+
+                    // 3. 디스크 동기화
+                    cookieManager.flush()
+
+                    // 4. WebView 데이터 완전 삭제
+                    android.webkit.WebStorage.getInstance().deleteAllData()
+
+                    // 5. 캐시 삭제
+                    WebBridge.listWebView?.clearCache(true)
+                    WebBridge.listWebView?.clearFormData()
+                    WebBridge.listWebView?.clearHistory()
+
+                    // 6. 쿠키 삭제 후 다시 한번 flush
+                    cookieManager.flush()
+
+                    // 7. 화면 전환
+                    WebBridge.listWebView?.postDelayed({
+                        // 검증
+                        val cookies = cookieManager.getCookie("$apiOrigin/") ?: "EMPTY"
+                        android.util.Log.e("AuraContainer", "Final cookies after logout: $cookies")
+
+                        WebBridge.load(frontEntryUrl)
+                        isFullScreen = true
+                    }, 500) // 더 긴 대기 시간
+                }
+            }
+        }, 800) // 백엔드 요청 완료 대기
     }
+
     fun closeDetailAndEnsureListVisible() {
         detailUrl = null
         detailLoadState = LoadState.Idle
@@ -104,52 +182,51 @@ fun AuraContainer(
     fun String?.isHttpUrl(): Boolean =
         !this.isNullOrBlank() && (this.startsWith("http://") || this.startsWith("https://"))
 
+    /* 상세 오프너 등록: FCM 큐 소진까지 */
+    DisposableEffect(Unit) {
+        WebBridge.setDetailOpener { url -> detailUrl = url }
+        onDispose { WebBridge.clearDetailOpener() }
+    }
+
     val isDetailVisible = detailUrl != null
-    val isDetailWebViewActive = isDetailVisible && detailLoadState is LoadState.Success
+    val listVisible   = !isDetailVisible && (listLoadState is LoadState.Success)
+    val detailVisible =  isDetailVisible && (detailLoadState is LoadState.Success)
 
-    val isListWebViewActive =
-        !isDetailVisible &&
-                listLoadState is LoadState.Success &&
-                (listHandle?.currentUrl?.invoke()).isHttpUrl()
-
-    // 검색을 지원하는 탭만 지정 (필요하면 배열로 확장)
+    // 검색 지원 탭
     val searchSupported = currentTab == "home"
 
-    // TopBar 모드 결정: DETAIL > (LIST & searchSupported) > OTHER
     val topBarMode = when {
-        isDetailWebViewActive -> TopBarMode.DETAIL
-        isListWebViewActive && searchSupported -> TopBarMode.LIST
+        detailVisible -> TopBarMode.DETAIL
+        listVisible && searchSupported -> TopBarMode.LIST
         else -> TopBarMode.OTHER
     }
 
-    // LIST가 아닐 때는 검색창 강제 끔(잔상 방지)
     val effectiveSearching = isSearching && topBarMode == TopBarMode.LIST
-    if (topBarMode != TopBarMode.LIST && isSearching) {
-        isSearching = false
-    }
+    if (topBarMode != TopBarMode.LIST && isSearching) isSearching = false
 
     Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
         topBar = {
-            AuraTopBar(
-                mode = topBarMode,
-                isSearching = effectiveSearching,
-                query = query,
-                onSearchToggle = { open ->
-                    if (topBarMode == TopBarMode.LIST) isSearching = open
-                },
-                onQueryChange = { q -> query = q },
-                onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
-                onShareClick = {
-                    val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
-                    shareLink(ctx, current)
-                },
-                onBackClick = {
-                    // DETAIL 왼쪽 뒤로가기 버튼
-                    closeDetailAndEnsureListVisible()
-                }
-            )
+            if (!isFullScreen) {
+                AuraTopBar(
+                    mode = topBarMode,
+                    isSearching = effectiveSearching,
+                    query = query,
+                    onSearchToggle = { open ->
+                        if (topBarMode == TopBarMode.LIST) isSearching = open
+                    },
+                    onQueryChange = { q -> query = q },
+                    onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
+                    onShareClick = {
+                        val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
+                        shareLink(ctx, current)
+                    },
+                    onBackClick = { closeDetailAndEnsureListVisible() }
+                )
+            }
         },
         bottomBar = {
+            if (!isFullScreen) {
             AuraBottomBar(
                 current = currentTab,
                 onSelect = { tab ->
@@ -158,23 +235,49 @@ fun AuraContainer(
                 }
             )
         }
+        }
     ) { inner ->
-        Box(Modifier.padding(inner)) {
-            // 목록 (SPA이므로 항상 존재)
+        // ★ 풀스크린이면 inner padding 제거
+        val contentPadding = if (isFullScreen) androidx.compose.foundation.layout.PaddingValues()
+        else inner
+
+        Box(Modifier.padding(contentPadding)) {
+
+            // 목록 (SPA)
             NoticeListWebView(
                 entryUrl = frontEntryUrl,
+                visible = listVisible, // ★ 성공시에만 보이게
+                onUrlChanged = { url -> updateFullScreenState(url) },
                 onOpenNotice = { url -> detailUrl = url },
                 onReauthRequest = { reauthFlow() },
                 onLogoutRequest = { logoutFlow() },
                 onOAuthRequest = { openOAuthInCustomTab() },
                 onLoadStateChange = { st -> listLoadState = st },
                 onHandleReady = { handle -> listHandle = handle },
+                // 온보딩 완료 콜백 추가
+                onOnboardingComplete = {
+                    if (hasBackendSessionCookie()) {
+                        isFullScreen = false
+                        // reload 대신 깨끗한 URL로 이동
+                        val cleanUrl = "$frontEntryUrl#/notice" // signUp 쿼리 없이
+                        listHandle?.currentUrl?.let { getCurrentUrl ->
+                            val current = getCurrentUrl()
+                            // 현재 URL에 signUp이 있으면 제거
+                            if (current?.contains("signUp=true") == true) {
+                                WebBridge.listWebView?.post {
+                                    WebBridge.listWebView?.loadUrl(cleanUrl)
+                                }
+                            }
+                        }
+                    }
+                }
             )
 
             // 상세 (오버레이)
             if (detailUrl != null) {
                 NoticeDetailWebView(
                     url = detailUrl!!,
+                    visible = detailVisible, // ★ 성공시에만 보이게
                     onClose = { closeDetailAndEnsureListVisible() },
                     onLoadStateChange = { st -> detailLoadState = st },
                     onHandleReady = { handle -> detailHandle = handle },
