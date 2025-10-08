@@ -53,10 +53,49 @@ fun AuraContainer(
     var listHandle by remember { mutableStateOf<WebViewHandle?>(null) }
     var detailHandle by remember { mutableStateOf<WebViewHandle?>(null) }
 
+    // 1. hasBackendSessionCookie를 먼저 정의
     fun hasBackendSessionCookie(): Boolean {
-        val cookies = CookieManager.getInstance().getCookie("$apiOrigin/") ?: return false
-        return cookies.split(";").any { it.trim().startsWith("WEB_SESSION=") }
+        val cookies = CookieManager.getInstance().getCookie("$apiOrigin/") ?: ""
+        val hasCookie = cookies.split(";").any { it.trim().startsWith("WEB_SESSION=") }
+
+        android.util.Log.d("AuraContainer", "Session cookie check: $hasCookie (cookies: ${cookies.take(100)}...)")
+        return hasCookie
     }
+
+    // onUrlChanged 로직 개선
+    fun updateFullScreenState(url: String) {
+        android.util.Log.d("AuraContainer", "URL changed: $url")
+        val u = runCatching { Uri.parse(url) }.getOrNull()
+        val path = u?.path.orEmpty()
+        val frag = u?.fragment.orEmpty()
+        val query = u?.query.orEmpty()
+
+        android.util.Log.d("AuraContainer", "Parsed - path: $path, fragment: $frag, query: $query")
+
+        val looksLikeLoginRoute =
+            path.startsWith("/login") ||
+                    frag.startsWith("/login") ||
+                    frag.contains("login")
+
+        // 온보딩 화면 감지 추가
+        val looksLikeOnboarding =
+            path.contains("/select-department") ||
+                    frag.contains("/select-department") ||
+                    frag.contains("select-department")
+
+        val hasSession = hasBackendSessionCookie()
+        val isHomeAndUnauthed = (path.isEmpty() || path == "/") && !hasSession
+
+        android.util.Log.d("AuraContainer", "Flags - login:$looksLikeLoginRoute, onboarding:$looksLikeOnboarding, session:$hasSession, homeUnauth:$isHomeAndUnauthed")
+
+        val newFullScreen = (looksLikeLoginRoute || looksLikeOnboarding || isHomeAndUnauthed) && !hasSession
+
+        if (newFullScreen != isFullScreen) {
+            android.util.Log.d("AuraContainer", "FullScreen changed: $isFullScreen -> $newFullScreen")
+            isFullScreen = newFullScreen
+        }
+    }
+
     fun openOAuthInCustomTab() {
         val now = System.currentTimeMillis()
         if (now - lastOAuthLaunchAt < 6000) return
@@ -86,12 +125,50 @@ fun AuraContainer(
             }
         }, 1000)
     }
+
     fun logoutFlow() {
-        CookieManager.getInstance().removeAllCookies {
-            CookieManager.getInstance().flush()
-            WebBridge.load(frontEntryUrl)
-        }
+        val cookieManager = CookieManager.getInstance()
+        val logoutUrl = "$apiOrigin/api/auth/logout"
+
+        // 1. 백엔드 로그아웃
+        WebBridge.listWebView?.postUrl(logoutUrl, ByteArray(0))
+
+        WebBridge.listWebView?.postDelayed({
+            // 2. 모든 쿠키 삭제
+            cookieManager.removeAllCookies { success ->
+                android.util.Log.d("AuraContainer", "All cookies removed: $success")
+
+                cookieManager.removeSessionCookies { sessionSuccess ->
+                    android.util.Log.d("AuraContainer", "Session cookies removed: $sessionSuccess")
+
+                    // 3. 디스크 동기화
+                    cookieManager.flush()
+
+                    // 4. WebView 데이터 완전 삭제
+                    android.webkit.WebStorage.getInstance().deleteAllData()
+
+                    // 5. 캐시 삭제
+                    WebBridge.listWebView?.clearCache(true)
+                    WebBridge.listWebView?.clearFormData()
+                    WebBridge.listWebView?.clearHistory()
+
+                    // 6. 쿠키 삭제 후 다시 한번 flush
+                    cookieManager.flush()
+
+                    // 7. 화면 전환
+                    WebBridge.listWebView?.postDelayed({
+                        // 검증
+                        val cookies = cookieManager.getCookie("$apiOrigin/") ?: "EMPTY"
+                        android.util.Log.e("AuraContainer", "Final cookies after logout: $cookies")
+
+                        WebBridge.load(frontEntryUrl)
+                        isFullScreen = true
+                    }, 500) // 더 긴 대기 시간
+                }
+            }
+        }, 800) // 백엔드 요청 완료 대기
     }
+
     fun closeDetailAndEnsureListVisible() {
         detailUrl = null
         detailLoadState = LoadState.Idle
@@ -170,27 +247,30 @@ fun AuraContainer(
             NoticeListWebView(
                 entryUrl = frontEntryUrl,
                 visible = listVisible, // ★ 성공시에만 보이게
-                onUrlChanged = { url ->
-                    val u = runCatching { Uri.parse(url) }.getOrNull()
-                    val path = u?.path.orEmpty()
-                    val frag = u?.fragment.orEmpty()     // 해시 라우팅 대응
-
-                    val looksLikeLoginRoute =
-                        path.startsWith("/login") ||
-                                frag.startsWith("/login") ||     // e.g. #/login
-                                frag.contains("login")           // e.g. #/?view=login 등
-
-                    // 홈('/')인데 아직 로그인 안 된 상태면 로그인 히어로 화면으로 간주 → 풀스크린
-                    val isHomeAndUnauthed = (path.isEmpty() || path == "/") && !hasBackendSessionCookie()
-
-                    isFullScreen = looksLikeLoginRoute || isHomeAndUnauthed
-                },
+                onUrlChanged = { url -> updateFullScreenState(url) },
                 onOpenNotice = { url -> detailUrl = url },
                 onReauthRequest = { reauthFlow() },
                 onLogoutRequest = { logoutFlow() },
                 onOAuthRequest = { openOAuthInCustomTab() },
                 onLoadStateChange = { st -> listLoadState = st },
                 onHandleReady = { handle -> listHandle = handle },
+                // 온보딩 완료 콜백 추가
+                onOnboardingComplete = {
+                    if (hasBackendSessionCookie()) {
+                        isFullScreen = false
+                        // reload 대신 깨끗한 URL로 이동
+                        val cleanUrl = "$frontEntryUrl#/notice" // signUp 쿼리 없이
+                        listHandle?.currentUrl?.let { getCurrentUrl ->
+                            val current = getCurrentUrl()
+                            // 현재 URL에 signUp이 있으면 제거
+                            if (current?.contains("signUp=true") == true) {
+                                WebBridge.listWebView?.post {
+                                    WebBridge.listWebView?.loadUrl(cleanUrl)
+                                }
+                            }
+                        }
+                    }
+                }
             )
 
             // 상세 (오버레이)

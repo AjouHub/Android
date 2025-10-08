@@ -108,6 +108,7 @@ fun NoticeListWebView(
     onOAuthRequest: (() -> Unit)? = null,
     onLoadStateChange: (LoadState) -> Unit,
     onHandleReady: (WebViewHandle) -> Unit,
+    onOnboardingComplete: (() -> Unit)? = null, // ✅ 새로 추가
 ) {
     val ctx = LocalContext.current
 
@@ -146,11 +147,35 @@ fun NoticeListWebView(
                         TopicManager.applyTypeMode(context, type, mode)
                     }
                     @JavascriptInterface fun routeChanged(url: String) { onUrlChanged(url) }
+
+                    // 수정: 콜백만 호출
+                    @JavascriptInterface fun onboardingComplete() {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            onOnboardingComplete?.invoke()
+                        }
+                    }
                 }, "AURA")
 
                 webChromeClient = object : WebChromeClient() {
                     override fun onProgressChanged(view: WebView?, newProgress: Int) {
                         onProgress(newProgress.coerceIn(0, 100) / 100f)
+                    }
+                    // console.log를 Logcat으로 출력
+                    override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                        msg?.let {
+                            val tag = "WebView-Console"
+                            val message = "[${it.sourceId()}:${it.lineNumber()}] ${it.message()}"
+
+                            when (it.messageLevel()) {
+                                android.webkit.ConsoleMessage.MessageLevel.ERROR ->
+                                    android.util.Log.e(tag, message)
+                                android.webkit.ConsoleMessage.MessageLevel.WARNING ->
+                                    android.util.Log.w(tag, message)
+                                else ->
+                                    android.util.Log.d(tag, message)
+                            }
+                        }
+                        return true
                     }
                 }
 

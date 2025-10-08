@@ -78,7 +78,9 @@ private fun AuraScaffold(
 
     fun frontEntryUrl(): String {
         val u = Uri.parse(ctx.getString(R.string.frontend_url))
-        return u.buildUpon().appendQueryParameter("embed", "app").toString()
+        val url = u.buildUpon().appendQueryParameter("embed", "app").toString()
+        android.util.Log.d("AuraScaffold", "frontEntryUrl: $url")
+        return url
     }
 
     // OAuth 콜백 처리
@@ -92,13 +94,17 @@ private fun AuraScaffold(
                 "$apiAuth/sso/bridge?code=$code"
             else
                 frontEntryUrl()
+            android.util.Log.d("AuraScaffold", "Loading bridge URL: $bridgeUrl")
             WebBridge.load(bridgeUrl)
+        } else {
+            android.util.Log.w("AuraScaffold", "Unmatched deeplink scheme/host")
         }
     }
 
     // FCM 알림 클릭: 상세 오버레이로 (큐잉, 폴백 로드)
     LaunchedEffect(pendingNavUrl) {
         val target = pendingNavUrl ?: return@LaunchedEffect
+        android.util.Log.d("AuraScaffold", "FCM navigation to: $target")
         clearPendingNavUrl()
         WebBridge.requestOpenDetail(target) // 준비 전이면 큐에 저장
     }
