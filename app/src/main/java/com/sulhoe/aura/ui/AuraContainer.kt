@@ -43,6 +43,9 @@ fun AuraContainer(
     var isSearching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
 
+    var isLoginRoute by remember { mutableStateOf(false) }
+    var isOnboardingRoute by remember { mutableStateOf(false) }
+
     var reauthInFlight by remember { mutableStateOf(false) }
     var lastReauthAt by remember { mutableStateOf(0L) }
     var lastOAuthLaunchAt by remember { mutableStateOf(0L) }
@@ -72,23 +75,39 @@ fun AuraContainer(
 
         android.util.Log.d("AuraContainer", "Parsed - path: $path, fragment: $frag, query: $query")
 
-        val looksLikeLoginRoute =
-            path.startsWith("/login") ||
-                    frag.startsWith("/login") ||
-                    frag.contains("login")
+        // 해시 라우터 우선
+        val route = if (frag.isNotBlank()) frag else path
+
+        // TopBar 모드/BottomBar 가시성 판단용 라우트 플래그
+        val looksLikeLoginRoute = route.startsWith("/login") || route.contains("login")
 
         // 온보딩 화면 감지 추가
-        val looksLikeOnboarding =
-            path.contains("/select-department") ||
-                    frag.contains("/select-department") ||
-                    frag.contains("select-department")
+        val looksLikeOnboarding = route.contains("/select-department")
 
         val hasSession = hasBackendSessionCookie()
-        val isHomeAndUnauthed = (path.isEmpty() || path == "/") && !hasSession
+        val isHomeAndUnauthed = ((path.isEmpty() || path == "/") && frag.isBlank()) && !hasSession
+
+        // 실제 앱 내부 라우트 진입 여부
+        val insideApp = route.startsWith("/notice") ||
+                route.startsWith("/bookmark") ||
+                route.startsWith("/settings")
+
+        // 현재 탭 동기화 (BottomBar 하이라이트를 라우트 기반으로)
+        val newTab = when {
+            route.startsWith("/bookmark") -> "bookmark"
+            route.startsWith("/settings") -> "settings"
+            else -> "home" // /notice 및 기타 기본은 home 취급
+        }
+        if (newTab != currentTab) currentTab = newTab
+
+        // TopBar 모드 계산에 쓰려는 라우트 플래그 저장
+        isLoginRoute = looksLikeLoginRoute
+        isOnboardingRoute = looksLikeOnboarding
 
         android.util.Log.d("AuraContainer", "Flags - login:$looksLikeLoginRoute, onboarding:$looksLikeOnboarding, session:$hasSession, homeUnauth:$isHomeAndUnauthed")
 
-        val newFullScreen = (looksLikeLoginRoute || looksLikeOnboarding || isHomeAndUnauthed) && !hasSession
+        // BottomBar 숨김 여부 (로그인/온보딩 혹은 비인증 홈일 때만 숨김)
+        val newFullScreen = (looksLikeLoginRoute || looksLikeOnboarding || (isHomeAndUnauthed && !insideApp)) && !hasSession
 
         if (newFullScreen != isFullScreen) {
             android.util.Log.d("AuraContainer", "FullScreen changed: $isFullScreen -> $newFullScreen")
@@ -192,13 +211,14 @@ fun AuraContainer(
     val listVisible   = !isDetailVisible && (listLoadState is LoadState.Success)
     val detailVisible =  isDetailVisible && (detailLoadState is LoadState.Success)
 
-    // 검색 지원 탭
-    val searchSupported = currentTab == "home"
+    // 검색 지원 탭 (home만 검색 허용)
+    val searchSupported = (currentTab == "home")
 
+    // TopBar 모드: 로그인/온보딩/검색미지원 탭/로딩 중에는 OTHER(비활성), 상세는 DETAIL, 그 외 LIST
     val topBarMode = when {
         detailVisible -> TopBarMode.DETAIL
-        listVisible && searchSupported -> TopBarMode.LIST
-        else -> TopBarMode.OTHER
+        isLoginRoute || isOnboardingRoute || !searchSupported || (listLoadState !is LoadState.Success) -> TopBarMode.OTHER
+        else -> TopBarMode.LIST
     }
 
     val effectiveSearching = isSearching && topBarMode == TopBarMode.LIST
@@ -207,25 +227,25 @@ fun AuraContainer(
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
         topBar = {
-            if (!isFullScreen) {
-                AuraTopBar(
-                    mode = topBarMode,
-                    isSearching = effectiveSearching,
-                    query = query,
-                    onSearchToggle = { open ->
-                        if (topBarMode == TopBarMode.LIST) isSearching = open
-                    },
-                    onQueryChange = { q -> query = q },
-                    onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
-                    onShareClick = {
-                        val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
-                        shareLink(ctx, current)
-                    },
-                    onBackClick = { closeDetailAndEnsureListVisible() }
-                )
-            }
+            // TopBar는 항상 렌더링 (로그인 화면 포함)
+            AuraTopBar(
+                mode = topBarMode,
+                isSearching = effectiveSearching,
+                query = query,
+                onSearchToggle = { open ->
+                    if (topBarMode == TopBarMode.LIST) isSearching = open
+                },
+                onQueryChange = { q -> query = q },
+                onSubmit = { q -> query = q; WebBridge.searchSubmit(q) },
+                onShareClick = {
+                    val current = detailHandle?.currentUrl?.invoke() ?: detailUrl
+                    shareLink(ctx, current)
+                },
+                onBackClick = { closeDetailAndEnsureListVisible() }
+            )
         },
         bottomBar = {
+            // BottomBar는 로그인/온보딩/비인증 홈에서만 숨김
             if (!isFullScreen) {
             AuraBottomBar(
                 current = currentTab,

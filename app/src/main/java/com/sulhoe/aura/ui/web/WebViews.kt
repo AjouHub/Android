@@ -263,6 +263,7 @@ fun NoticeListWebView(
                                 }
                               });
                               window.addEventListener('popstate', notify);
+                              window.addEventListener('hashchange', notify); // 해시 라우트 변화도 추적
                               notify();
                             })();
                         """.trimIndent()
