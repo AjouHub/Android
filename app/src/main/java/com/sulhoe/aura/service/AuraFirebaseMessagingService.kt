@@ -52,20 +52,13 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
-
-            // PendingIntent 식별 충돌 방지용 고유 action
             action = "com.sulhoe.aura.OPEN_LINK.$uniId"
-
-            // FCM date 전달
-            data.forEach { (k, v) -> putExtra(k, v) } // type, link, etc.
+            data.forEach { (k, v) -> putExtra(k, v) }
         }
-
-        // 최신 extras가 항상 반영되도록 UPDATE_CURRENT 추가
-        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
-                PendingIntent.FLAG_IMMUTABLE or
-                PendingIntent.FLAG_UPDATE_CURRENT
-
-        val pendingIntent = PendingIntent.getActivity(this, uniId, intent, pendingFlags)
+        val pendingIntent = PendingIntent.getActivity(
+            this, uniId, intent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
         val channelId = when {
             data["urgent"] == "1" || data["priority"] == "high" -> getString(R.string.ch_urgent_id)
@@ -73,23 +66,17 @@ class AuraFirebaseMessagingService : FirebaseMessagingService() {
             else -> getString(R.string.ch_notice_id)
         }
 
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info) // TODO: 앱 벡터 아이콘으로 교체 권장
+            .setSmallIcon(R.drawable.ic_notification) // 앱 아이콘으로 교체 권장
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body)) // 긴 본문 표시
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
-            .setSound(soundUri) // Pre-O 호환
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)   // 분류 힌트
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // 잠금화면 노출
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, channelId, NotificationManager.IMPORTANCE_DEFAULT)
-            nm.createNotificationChannel(channel)
-        }
-        nm.notify(uniId, builder.build())
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(uniId, builder.build())
     }
 }

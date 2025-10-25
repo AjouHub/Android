@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <style name="Theme.AURA" parent="android:Theme.Material.Light.NoActionBar" />
-    <style name="Theme.AURA.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/white</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_aura_logo</item>
-        <item name="postSplashScreenTheme">@style/Theme.AURA</item>
+    <style name="Theme.AURA" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 프리뷰 윈도우(시스템 스플래시) 비활성화 -->
+        <item name="android:windowDisablePreview">true</item>
+        <!-- 투명 시작 -->
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowBackground">@android:color/white</item>
     </style>
 </resources>
