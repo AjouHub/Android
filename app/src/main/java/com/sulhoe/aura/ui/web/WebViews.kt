@@ -103,6 +103,7 @@ fun NoticeListWebView(
     visible: Boolean,
     onUrlChanged: (String) -> Unit,
     onOpenNotice: (String) -> Unit,
+    onOpenAbout: (String) -> Unit,
     onProgress: (Float) -> Unit = {},
     onReauthRequest: (() -> Unit)? = null,
     onLogoutRequest: (() -> Unit)? = null,
@@ -139,6 +140,7 @@ fun NoticeListWebView(
 
                 addJavascriptInterface(object {
                     @JavascriptInterface fun openNotice(url: String) = onOpenNotice(url)
+                    @JavascriptInterface fun openAbout(url: String) = onOpenAbout(url)
                     @JavascriptInterface fun reauth() { onReauthRequest?.invoke() }
                     @JavascriptInterface fun logout() { onLogoutRequest?.invoke() }
                     @JavascriptInterface fun ensureUserTopic(email: String?) {
