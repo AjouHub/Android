@@ -133,12 +133,17 @@ fun AuraContainer(
         val looksLikeLoginRoute = route.startsWith("/login") || route.contains("login")
         val looksLikeOnboarding = route.contains("/select-department")
         val hasSession = hasBackendSessionCookie()
-        val isHomeAndUnauthed = ((path.isEmpty() || path == "/") && frag.isBlank()) && !hasSession
 
+        // 루트도 앱 내부로 간주 (홈)
+        val isRoot = route.isBlank() || route == "/"
         // 실제 앱 내부 라우트 진입 여부
-        val insideApp = route.startsWith("/notice") ||
+        val insideApp = isRoot ||
+                route.startsWith("/notice") ||
                 route.startsWith("/bookmark") ||
                 route.startsWith("/settings")
+
+        // ✅ SPA가 아직 초기화 전(루트 + 목록 미로딩)이면 판정 보류 → 기존 상태 유지
+        if (isRoot && listLoadState !is LoadState.Success) return
 
         // 현재 탭 동기화 (하단바 하이라이트용)
         val newTab = when {
@@ -152,13 +157,16 @@ fun AuraContainer(
         isLoginRoute = looksLikeLoginRoute
         isOnboardingRoute = looksLikeOnboarding
 
-        android.util.Log.d("AuraContainer",
-            "Flags - login:$looksLikeLoginRoute, onboarding:$looksLikeOnboarding, " +
-                    "session:$hasSession, homeUnauth:$isHomeAndUnauthed")
+        android.util.Log.d("AuraContainer", "Flags - login:$looksLikeLoginRoute, onboarding:$looksLikeOnboarding, " + "session:$hasSession")
 
-        // 전체화면 모드 판단: 로그인/온보딩 또는 비인증 홈일 때만 하단바 숨김
-        val newFullScreen = (looksLikeLoginRoute || looksLikeOnboarding ||
-                (isHomeAndUnauthed && !insideApp)) && !hasSession
+        // 전체화면 모드 판단: 로그인/온보딩일 때만 하단바 숨김
+        val newFullScreen = when {
+            // 로그인/온보딩은 "미인증일 때만" 풀스크린
+            looksLikeLoginRoute || looksLikeOnboarding -> !hasSession
+            // 앱 외부 라우트이면서 미인증이면 풀스크린
+            !insideApp && !hasSession -> true
+            else -> false
+        }
 
         if (newFullScreen != isFullScreen) {
             android.util.Log.d("AuraContainer", "FullScreen changed: $isFullScreen -> $newFullScreen")
