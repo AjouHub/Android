@@ -8,6 +8,7 @@ import android.net.http.SslError
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -135,8 +136,9 @@ fun NoticeListWebView(
                 settings.setSupportZoom(false)
                 settings.textZoom = 100
 
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                val cookieManager = CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(this, true)
 
                 addJavascriptInterface(object {
                     @JavascriptInterface fun openNotice(url: String) = onOpenNotice(url)
@@ -546,5 +548,219 @@ fun NoticeDetailWebView(
         update = { view ->
             view.visibility = if (visible) View.VISIBLE else View.GONE
         }
+    )
+}
+
+/* About WebView (노션 등 외부 페이지용) */
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun AboutWebView(
+    url: String,
+    visible: Boolean,
+    onClose: () -> Unit,
+    onLoadStateChange: (LoadState) -> Unit,
+    onHandleReady: (WebViewHandle) -> Unit,
+) {
+    val ctx = LocalContext.current
+    var hadMainFrameError by remember { mutableStateOf(false) }
+    var isClearingToBlank by remember { mutableStateOf(false) }
+    var lastUrl by remember { mutableStateOf(url) }
+
+    BackHandler(enabled = true) { onClose() }
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            WebView(context).apply {
+                // ==== 설정 ====
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.databaseEnabled = true
+                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.setSupportZoom(true)
+                settings.builtInZoomControls = true
+                settings.displayZoomControls = false
+
+                // 팝업/새창 허용
+                settings.setSupportMultipleWindows(true)
+                settings.javaScriptCanOpenWindowsAutomatically = true
+
+                // UA는 기본 + 태그만
+                settings.userAgentString = settings.userAgentString + " AURA-App"
+
+                // 쿠키 (해당 WebView에 적용)
+                val cm = CookieManager.getInstance()
+                cm.setAcceptCookie(true)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    cm.setAcceptThirdPartyCookies(this, true)
+                }
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                    WebView.setWebContentsDebuggingEnabled(true)
+                }
+
+                val hostWebView = this
+
+                // ==== ChromeClient: 새창 처리 (임시 WebView로 가로채기) ====
+                webChromeClient = object : WebChromeClient() {
+                    override fun onCreateWindow(
+                        view: WebView?,
+                        isDialog: Boolean,
+                        isUserGesture: Boolean,
+                        resultMsg: android.os.Message?
+                    ): Boolean {
+                        val popup = WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                    val u = req?.url ?: return false
+                                    // 팝업이 여는 URL을 현재 WebView로 로드
+                                    hostWebView.loadUrl(u.toString())
+                                    // 임시 WebView 정리
+                                    v?.post { v.destroy() }
+                                    return true
+                                }
+                            }
+                        }
+                        val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                        transport.webView = popup
+                        resultMsg.sendToTarget()
+                        return true
+                    }
+
+                    override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                        msg?.let {
+                            android.util.Log.d(
+                                "AboutWebView-Console",
+                                "[${it.sourceId()}:${it.lineNumber()}] ${it.message()}"
+                            )
+                        }
+                        return true
+                    }
+                }
+
+                // ==== WebViewClient ====
+                webViewClient = object : WebViewClient() {
+
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                        url ?: return
+                        if (isClearingToBlank && url == "about:blank") return
+                        hadMainFrameError = false
+                        lastUrl = url
+                        onLoadStateChange(LoadState.Loading)
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        if (isClearingToBlank && url == "about:blank") return
+                        if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
+                    }
+
+                    override fun onPageCommitVisible(view: WebView?, url: String?) {
+                        if (isClearingToBlank && url == "about:blank") return
+                        if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView?, request: WebResourceRequest?, resp: WebResourceResponse?
+                    ) {
+                        if (request?.isForMainFrame == true) {
+                            showError(view, resp?.statusCode, resp?.reasonPhrase ?: "HTTP 오류", request.url?.toString())
+                        }
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView?, request: WebResourceRequest?, err: WebResourceError?
+                    ) {
+                        if (request?.isForMainFrame == true) {
+                            showError(view, null, err?.description?.toString(), request.url?.toString())
+                        }
+                    }
+
+                    @Deprecated("for < M")
+                    override fun onReceivedError(view: WebView?, code: Int, desc: String?, failingUrl: String?) {
+                        showError(view, code, desc, failingUrl)
+                    }
+
+                    override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                        handler?.cancel()
+                        showError(view, null, "SSL 오류", error?.url)
+                    }
+
+                    // 딥링크/인텐트 폴백
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val u = request?.url ?: return false
+                        val s = u.toString()
+                        lastUrl = s
+
+                        if (s.startsWith("notion://") || s.startsWith("intent://") || s.startsWith("market://")) {
+                            return try {
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, u))
+                                true
+                            } catch (_: Exception) {
+                                val fallback = if (s.startsWith("notion://"))
+                                    Uri.parse(s.replaceFirst("notion://", "https://www.notion.so/"))
+                                else Uri.parse("https://www.notion.so/")
+                                view?.loadUrl(fallback.toString())
+                                true
+                            }
+                        }
+                        // http/https는 WebView에서 처리
+                        return false
+                    }
+
+                    // 렌더러 크래시 → 빈 화면 방지
+                    override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                        android.util.Log.e("AboutWebView", "Render process gone. didCrash=${detail?.didCrash()}")
+                        onLoadStateChange(LoadState.Error(message = "렌더러 오류", failingUrl = lastUrl))
+                        return true
+                    }
+
+                    private fun showError(view: WebView?, status: Int?, msg: String?, failing: String?) {
+                        hadMainFrameError = true
+                        isClearingToBlank = true
+                        view?.stopLoading()
+                        view?.loadUrl("about:blank")
+                        view?.clearHistory()
+                        onLoadStateChange(
+                            LoadState.Error(
+                                statusCode = status,
+                                message = msg ?: "페이지 로드 오류",
+                                failingUrl = failing
+                            )
+                        )
+                    }
+                }
+
+                visibility = if (visible) View.VISIBLE else View.GONE
+
+                val self = this
+                onHandleReady(
+                    WebViewHandle(
+                        reload = {
+                            self.post {
+                                isClearingToBlank = false
+                                val target = lastUrl
+                                if (target.isNotEmpty() && target != "about:blank") self.loadUrl(target)
+                                else self.reload()
+                            }
+                        },
+                        currentUrl = { self.url }
+                    )
+                )
+
+                // ✅ UA 캐시로 받은 잘못된 번들을 버리기 위해 초기 1회 클리어
+                clearCache(true)
+                clearHistory()
+
+                onLoadStateChange(LoadState.Loading)
+                loadUrl(url)
+            }
+        },
+        update = { view -> view.visibility = if (visible) View.VISIBLE else View.GONE }
     )
 }
