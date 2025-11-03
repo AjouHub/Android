@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -20,6 +21,8 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.sulhoe.aura.fcm.TopicManager
 import com.sulhoe.aura.ui.common.LoadState
+import kotlinx.coroutines.delay
 import java.io.ByteArrayInputStream
 
 /* ===================== WebBridge ===================== */
@@ -548,160 +552,5 @@ fun NoticeDetailWebView(
         update = { view ->
             view.visibility = if (visible) View.VISIBLE else View.GONE
         }
-    )
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-fun AboutWebView(
-    url: String,
-    visible: Boolean,
-    onClose: () -> Unit,
-    onLoadStateChange: (LoadState) -> Unit,
-    onHandleReady: (WebViewHandle) -> Unit,
-) {
-    val ctx = LocalContext.current
-    var hadMainFrameError by remember { mutableStateOf(false) }
-    var isClearingToBlank by remember { mutableStateOf(false) }
-    var lastUrl by remember { mutableStateOf(url) }
-
-    BackHandler(enabled = true) { onClose() }
-
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { context ->
-            WebView(context).apply {
-                // ==== WebView 설정 ====
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    databaseEnabled = true
-                    cacheMode = WebSettings.LOAD_DEFAULT
-                    mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                    useWideViewPort = true
-                    loadWithOverviewMode = true
-                    setSupportZoom(true)
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                    javaScriptCanOpenWindowsAutomatically = true
-                    setSupportMultipleWindows(true)
-                    // 노션이 모바일 UA를 제한하는 경우가 있어 데스크톱 UA 사용
-                    userAgentString =
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                }
-
-                // ==== 쿠키 (여기서 'this'는 WebView) ====
-                val cm = CookieManager.getInstance()
-                cm.setAcceptCookie(true)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                    cm.setAcceptThirdPartyCookies(this, true) // ← WebView를 넘깁니다!
-                }
-
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
-                    WebView.setWebContentsDebuggingEnabled(true)
-                }
-
-                // ==== 새창 처리 (노션의 window.open) ====
-                webChromeClient = object : WebChromeClient() {
-                    override fun onCreateWindow(
-                        view: WebView?,
-                        isDialog: Boolean,
-                        isUserGesture: Boolean,
-                        resultMsg: android.os.Message?
-                    ): Boolean {
-                        // 팝업을 현재 WebView로 연결
-                        val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                        transport.webView = this@apply
-                        resultMsg.sendToTarget()
-                        return true
-                    }
-                }
-
-                // ==== 로딩/에러 처리 ====
-                webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                        url ?: return
-                        if (isClearingToBlank && url == ABOUT_BLANK) return
-                        hadMainFrameError = false
-                        lastUrl = url
-                        onLoadStateChange(LoadState.Loading)
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        if (isClearingToBlank && url == ABOUT_BLANK) return
-                        if (!hadMainFrameError) onLoadStateChange(LoadState.Success)
-                    }
-
-                    override fun onReceivedHttpError(
-                        view: WebView?, request: WebResourceRequest?, resp: WebResourceResponse?
-                    ) {
-                        if (request?.isForMainFrame == true) {
-                            showError(view, resp?.statusCode, resp?.reasonPhrase, request.url?.toString())
-                        }
-                    }
-
-                    override fun onReceivedError(
-                        view: WebView?, request: WebResourceRequest?, err: WebResourceError?
-                    ) {
-                        if (request?.isForMainFrame == true) {
-                            showError(view, null, err?.description?.toString(), request.url?.toString())
-                        }
-                    }
-
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val u = request?.url ?: return false
-                        val s = u.toString()
-                        lastUrl = s
-
-                        // 노션 앱 스킴 대응
-                        if (s.startsWith("notion://")) {
-                            return try {
-                                ctx.startActivity(Intent(Intent.ACTION_VIEW, u))
-                                true
-                            } catch (_: Exception) {
-                                view?.loadUrl(s.replaceFirst("notion://", "https://www.notion.so/"))
-                                true
-                            }
-                        }
-                        return false // http/https는 WebView가 처리
-                    }
-
-                    private fun showError(view: WebView?, status: Int?, msg: String?, failing: String?) {
-                        hadMainFrameError = true
-                        isClearingToBlank = true
-                        view?.stopLoading()
-                        view?.loadUrl(ABOUT_BLANK)
-                        onLoadStateChange(
-                            LoadState.Error(
-                                statusCode = status,
-                                message = msg ?: "페이지 로드 오류",
-                                failingUrl = failing
-                            )
-                        )
-                    }
-                }
-
-                visibility = if (visible) View.VISIBLE else View.GONE
-
-                val self = this
-                onHandleReady(
-                    WebViewHandle(
-                        reload = {
-                            self.post {
-                                isClearingToBlank = false
-                                val target = lastUrl
-                                if (target.isNotEmpty() && target != ABOUT_BLANK) self.loadUrl(target)
-                                else self.reload()
-                            }
-                        },
-                        currentUrl = { self.url }
-                    )
-                )
-
-                onLoadStateChange(LoadState.Loading)
-                loadUrl(url)
-            }
-        },
-        update = { it.visibility = if (visible) View.VISIBLE else View.GONE }
     )
 }

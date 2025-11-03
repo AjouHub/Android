@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.sulhoe.aura.ui.common.LoadState
@@ -68,7 +70,6 @@ fun AuraContainer(
     }  // 전체화면 모드 (로그인/온보딩 시)
     var currentTab by remember { mutableStateOf("home") }    // 현재 선택된 하단 탭
     var detailUrl by remember { mutableStateOf<String?>(null) } // 상세 페이지 URL (null이면 목록 화면)
-    var aboutUrl by remember { mutableStateOf<String?>(null) }  // About 페이지 URL (null이면 닫힌 상태)
 
     // 초기 쿠키 상태 로깅
     LaunchedEffect(Unit) {
@@ -92,12 +93,10 @@ fun AuraContainer(
     // ========== WebView 로드 상태 관리 ==========
     var listLoadState by remember { mutableStateOf<LoadState>(LoadState.Idle) }     // 목록 WebView 로드 상태
     var detailLoadState by remember { mutableStateOf<LoadState>(LoadState.Idle) }   // 상세 WebView 로드 상태
-    var aboutLoadState by remember { mutableStateOf<LoadState>(LoadState.Idle) }    // About WebView 로드 상태
 
     // ========== WebView 핸들 관리 ==========
     var listHandle by remember { mutableStateOf<WebViewHandle?>(null) }     // 목록 WebView 제어 핸들
     var detailHandle by remember { mutableStateOf<WebViewHandle?>(null) }   // 상세 WebView 제어 핸들
-    var aboutHandle by remember { mutableStateOf<WebViewHandle?>(null) }    // About WebView 제어 핸들
 
 
     // 목록 로드 성공 시 전체화면 상태 재확인
@@ -304,17 +303,15 @@ fun AuraContainer(
 
     // ========== UI 가시성 제어 ==========
     val isDetailVisible = detailUrl != null  // 상세 화면이 열려있는지
-    val isAboutVisible = aboutUrl != null    // About 화면이 열려있는지
-    val listVisible = !isDetailVisible && !isAboutVisible && (listLoadState is LoadState.Success)      // 목록 WebView 표시 여부
-    val detailVisible = isDetailVisible && !isAboutVisible && (detailLoadState is LoadState.Success)   // 상세 WebView 표시 여부
-    val aboutVisible = isAboutVisible && (aboutLoadState is LoadState.Success)      // About WebView 표시 여부
+    val listVisible = !isDetailVisible && (listLoadState is LoadState.Success)      // 목록 WebView 표시 여부
+    val detailVisible = isDetailVisible && (detailLoadState is LoadState.Success)   // 상세 WebView 표시 여부
 
     // ========== TopBar 모드 계산 ==========
     val searchSupported = (currentTab == "home")  // 검색은 home 탭에서만 지원
 
     // TopBar 모드 결정
     val topBarMode = when {
-        detailVisible || aboutVisible -> TopBarMode.DETAIL  // 상세 화면
+        detailVisible -> TopBarMode.DETAIL  // 상세 화면
         isLoginRoute || isOnboardingRoute || !searchSupported ||
                 (listLoadState !is LoadState.Success) -> TopBarMode.OTHER  // 비활성 모드
         else -> TopBarMode.LIST  // 목록 화면
@@ -341,9 +338,8 @@ fun AuraContainer(
                     WebBridge.searchSubmit(q)
                 },
                 onShareClick = {
-                    // About 페이지일 때는 aboutUrl, 상세일 때는 detailUrl 공유
+                    // 상세일 때는 detailUrl 공유
                     val current = when {
-                        aboutVisible -> aboutUrl
                         detailVisible -> detailHandle?.currentUrl?.invoke() ?: detailUrl
                         else -> null
                     }
@@ -351,13 +347,8 @@ fun AuraContainer(
                     shareLink(ctx, current)
                 },
                 onBackClick = {
-                    // About 페이지가 열려있으면 닫기, 아니면 상세 닫기
-                    if (aboutVisible) {
-                        aboutUrl = null
-                        aboutLoadState = LoadState.Idle
-                    } else {
-                        closeDetailAndEnsureListVisible()
-                    }
+                    // 상세 닫기
+                    closeDetailAndEnsureListVisible()
                 }
             )
         },
@@ -388,7 +379,14 @@ fun AuraContainer(
                 visible = listVisible,  // 성공 상태에서만 표시
                 onUrlChanged = { url -> updateFullScreenState(url) },
                 onOpenNotice = { url -> detailUrl = url },
-                onOpenAbout = { url -> aboutUrl = url },
+                onOpenAbout = { url ->
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        ctx.startActivity(intent)
+                        android.util.Log.d("AuraContainer", "Opening About page in external browser: $url")
+                    } catch (e: Exception) {
+                        android.util.Log.e("AuraContainer", "Failed to open About page in browser", e)
+                    } },
                 onReauthRequest = { reauthFlow() },
                 onLogoutRequest = { logoutFlow() },
                 onOAuthRequest = { openOAuthInCustomTab() },
@@ -422,22 +420,8 @@ fun AuraContainer(
                 )
             }
 
-            // ========== About WebView (오버레이) ==========
-            if (aboutUrl != null) {
-                AboutWebView(
-                    url = aboutUrl!!,
-                    visible = aboutVisible,  // 성공 상태에서만 표시
-                    onClose = {
-                        aboutUrl = null
-                        aboutLoadState = LoadState.Idle
-                    },
-                    onLoadStateChange = { st -> aboutLoadState = st },
-                    onHandleReady = { handle -> aboutHandle = handle },
-                )
-            }
-
             // ========== 목록 로딩/에러 화면 (상세가 아닐 때) ==========
-            if (detailUrl == null && aboutUrl == null) {
+            if (detailUrl == null) {
                 when (val st = listLoadState) {
                     is LoadState.Loading, LoadState.Idle -> {
                         // 로딩 중 화면
@@ -461,7 +445,7 @@ fun AuraContainer(
             }
 
             // ========== 상세 로딩/에러 화면 (상세일 때) ==========
-            if (detailUrl != null && aboutUrl == null) {
+            if (detailUrl != null) {
                 when (val st = detailLoadState) {
                     is LoadState.Loading, LoadState.Idle -> {
                         // 로딩 중 화면
@@ -477,30 +461,6 @@ fun AuraContainer(
                             onRetry = {
                                 detailLoadState = LoadState.Loading
                                 detailHandle?.reload?.invoke()
-                            }
-                        )
-                    }
-                    else -> Unit
-                }
-            }
-
-            // ========== About 로딩/에러 화면 (About 페이지일 때) ==========
-            if (aboutUrl != null) {
-                when (val st = aboutLoadState) {
-                    is LoadState.Loading, LoadState.Idle -> {
-                        // 로딩 중 화면
-                        DelayPage(
-                            "어바웃 페이지를 불러오는 중",
-                            "잠시만 기다려주세요..."
-                        )
-                    }
-                    is LoadState.Error -> {
-                        // 에러 화면
-                        ErrorPage(
-                            loadState = st,
-                            onRetry = {
-                                aboutLoadState = LoadState.Loading
-                                aboutHandle?.reload?.invoke()
                             }
                         )
                     }
