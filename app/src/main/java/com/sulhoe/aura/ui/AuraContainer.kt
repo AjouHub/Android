@@ -367,8 +367,10 @@ fun AuraContainer(
     ) { inner ->
         // 전체화면 모드에서는 padding 제거
         val contentPadding = if (isFullScreen)
-            androidx.compose.foundation.layout.PaddingValues()
+            // 전체화면일 때도 상단 패딩은 유지하여 TopBar 뒤에 콘텐츠가 가려지지 않도록 합니다.
+            androidx.compose.foundation.layout.PaddingValues(top = inner.calculateTopPadding())
         else
+            // 전체화면이 아닐 때는 Scaffold가 제공하는 모든 패딩(상단, 하단)을 적용합니다.
             inner
 
         Box(Modifier.padding(contentPadding)) {
