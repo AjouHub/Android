@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
@@ -24,7 +26,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
@@ -46,8 +54,39 @@ fun AuraBottomBar(
         BottomNavItem("settings", "설정", Icons.Outlined.Settings, Icons.Filled.Settings)
     )
 
+    val shadowColor = Color.Black.copy(alpha = 0.15f)
+
     NavigationBar(
-        containerColor = Color.White
+        containerColor = Color.White,
+        modifier = Modifier
+            .drawBehind {
+                drawIntoCanvas { canvas ->
+                    val paint = android.graphics.Paint().apply {
+                        color = android.graphics.Color.TRANSPARENT
+                        setShadowLayer(
+                            40f,  // 그림자 반경
+                            0f,   // X 오프셋
+                            -8f,  // Y 오프셋 (위로)
+                            shadowColor.copy(alpha = 0.2f).toArgb()
+                        )
+                    }
+
+                    val rect = android.graphics.RectF(
+                        0f,
+                        0f,
+                        size.width,
+                        size.height
+                    )
+
+                    canvas.nativeCanvas.drawRoundRect(
+                        rect,
+                        72f,  // 24.dp를 픽셀로 변환 (24 * 3 = 72)
+                        72f,
+                        paint
+                    )
+                }
+            }
+            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
     ) {
         navItems.forEach { item ->
             val isSelected = current == item.key
