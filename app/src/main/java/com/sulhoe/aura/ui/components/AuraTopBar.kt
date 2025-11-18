@@ -260,7 +260,7 @@ fun AuraTopBar(
         if (mode != TopBarMode.LIST) {
             HorizontalDivider(
                 thickness = 1.dp,
-                color = Color(0xFFE0E0E0)
+                color = Color(0xFFD3D8E5)
             )
         }
     }
