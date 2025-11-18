@@ -255,5 +255,13 @@ fun AuraTopBar(
                 }
             }
         }
+
+        // LIST 모드가 아닐 때만 구분선 표시
+        if (mode != TopBarMode.LIST) {
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = Color(0xFFE0E0E0)
+            )
+        }
     }
 }
