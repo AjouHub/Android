@@ -8,11 +8,16 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.util.Log
+import com.google.firebase.messaging.FirebaseMessaging
+import com.sulhoe.aura.fcm.TopicManager
 
 class AuraApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannelsIfNeeded()
+        TopicManager.subscribe(applicationContext, "system")
+        TopicManager.subscribe(applicationContext, "broadcast")
     }
 
     private fun createNotificationChannelsIfNeeded() {
@@ -20,13 +25,18 @@ class AuraApp : Application() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         fun ch(id: String, name: String, desc: String, importance: Int) =
-            NotificationChannel(id, name, importance).apply { description = desc }
+            NotificationChannel(id, name, importance).apply {
+                description = desc
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                enableVibration(true)
+                setSound(null, null)
+            }
 
         val notice = ch(
             getString(R.string.ch_notice_id),
             getString(R.string.ch_notice_name),
             getString(R.string.ch_notice_desc),
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_HIGH
         )
 
         val urgent = ch(
@@ -34,23 +44,13 @@ class AuraApp : Application() {
             getString(R.string.ch_urgent_name),
             getString(R.string.ch_urgent_desc),
             NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            enableVibration(true)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            // 필요 시 별도 사운드:
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            setSound(uri, attrs)
-        }
+        )
 
         val system = ch(
             getString(R.string.ch_system_id),
             getString(R.string.ch_system_name),
             getString(R.string.ch_system_desc),
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_HIGH
         )
 
         nm.createNotificationChannels(listOf(notice, urgent, system))

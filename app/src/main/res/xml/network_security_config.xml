@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 기본은 HTTPS만 허용 -->
+    <base-config cleartextTrafficPermitted="false" />
+    <!-- 필요한 도메인만 HTTP 허용 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- 아주대 전체 하위 도메인 허용 예시 -->
+        <domain includeSubdomains="true">ajou.ac.kr</domain>
+        <!-- 필요시 추가 -->
+        <!-- <domain includeSubdomains="true">another-domain.example</domain> -->
+    </domain-config>
+</network-security-config>
